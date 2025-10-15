@@ -1,362 +1,422 @@
 "use client";
 
 import * as React from "react";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { ChevronDown } from "lucide-react";
-import { DroppableSection } from "./components/DroppableSection";
-import { TodoHeader } from "./components/TodoHeader";
-import { TodoInput } from "./components/TodoInput";
-import { ExportView } from "./components/ExportView";
-import { DragOverlayPreview } from "./components/DragOverlayPreview";
-import { TEXTAREA_MIN_HEIGHT, POPUP_WIDTH, POPUP_HEIGHT } from "./constants/ui";
-import { availableCommands } from "./constants/commands";
-import { Todo, Priority } from "./types/todo";
-import { sortTodosByPriority } from "./utils/todo-sort";
-import { generateMarkdown } from "./utils/markdown";
-import {
-  DndContext,
-  DragEndEvent,
-  DragOverlay,
-  DragStartEvent,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import { arrayMove } from "@dnd-kit/sortable";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { POPUP_WIDTH } from "./constants/ui";
+import { ChevronLeft, Save, Settings, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { brutalismActiveClassName } from "@/lib/className";
+import { Toaster } from "@/components/ui/sonner";
+import { toast } from "sonner";
 
 /**
- * Main todo popup component for Chrome extension.
+ * Campaign Navigator popup component for Chrome extension.
  * Features:
- * - Drag-and-drop reordering
- * - Priority system (low/medium/high)
- * - Command mode (press : to activate)
- * - GitHub PR URL extraction
- * - Markdown export
- * - Chrome storage persistence
+ * - Campaign name + ID management with localStorage
+ * - Base URL configuration with campaign_id replacement
+ * - Direct navigation to any campaign
+ * - View-based settings (Settings button replaces view)
+ * - Display campaigns in flex column format with name and ID
  */
-export default function TodoPopup() {
-  const [todos, setTodos] = React.useState<Todo[]>([]);
-  const [inputValue, setInputValue] = React.useState("");
-  const [activeId, setActiveId] = React.useState<string | null>(null);
-  const [isExportView, setIsExportView] = React.useState(false);
-  const [isCommandMode, setIsCommandMode] = React.useState(false);
-  const [selectedCommandIndex, setSelectedCommandIndex] = React.useState(0);
-  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
-  // Require 8px drag distance to distinguish from clicks
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    })
-  );
+interface Campaign {
+  name: string;
+  id: string;
+}
 
-  // Load todos from Chrome storage on mount
+const STORAGE_KEYS = {
+  CAMPAIGN_DATA: "gmv_max_campaign_data",
+  BASE_URL: "gmv_max_base_url",
+  CURRENT_INDEX: "gmv_max_current_index",
+  COMPLETED_CAMPAIGNS: "gmv_max_completed_campaigns",
+  AUTO_CLICK_ENABLED: "gmv_max_auto_click_enabled",
+};
+
+export default function URLReplacerPopup() {
+  const [isLoading, setIsLoading] = React.useState(false);
+  const [campaignDataText, setCampaignDataText] = React.useState("");
+  const [baseUrl, setBaseUrl] = React.useState("");
+  const [currentIndex, setCurrentIndex] = React.useState(0);
+  const [campaigns, setCampaigns] = React.useState<Campaign[]>([]);
+  const [isSettingsView, setIsSettingsView] = React.useState(false);
+  const [completedCampaigns, setCompletedCampaigns] = React.useState<Set<number>>(new Set());
+  const [autoClickEnabled, setAutoClickEnabled] = React.useState(true);
+
+  // Check if base URL contains required date parameters
+  const hasRequiredDateParams = React.useMemo(() => {
+    if (!baseUrl.trim()) return false;
+    try {
+      const url = new URL(baseUrl);
+      const hasStartDate = url.searchParams.has("campaign_start_date");
+      const hasEndDate = url.searchParams.has("campaign_end_date");
+      return hasStartDate && hasEndDate;
+    } catch {
+      return false;
+    }
+  }, [baseUrl]);
+
+  // Load stored data on mount
   React.useEffect(() => {
-    if (typeof chrome !== "undefined" && chrome.storage) {
-      chrome.storage.local.get(["todos"], (result) => {
-        if (result.todos) {
-          // Migrate old todos to include createdAt and priority fields
-          const migratedTodos = result.todos.map((todo: Todo) => ({
-            ...todo,
-            createdAt: todo.createdAt || Date.now(),
-            priority: todo.priority || "low",
-          }));
-          const sortedTodos = sortTodosByPriority(migratedTodos);
-          setTodos(sortedTodos);
-          // Save migrated todos back to storage
-          chrome.storage.local.set({ todos: sortedTodos });
-        }
-      });
-    }
+    const loadStoredData = () => {
+      try {
+        const storedCampaignData = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_DATA);
+        const storedBaseUrl = localStorage.getItem(STORAGE_KEYS.BASE_URL);
+        const storedIndex = localStorage.getItem(STORAGE_KEYS.CURRENT_INDEX);
+        const storedCompletedCampaigns = localStorage.getItem(STORAGE_KEYS.COMPLETED_CAMPAIGNS);
 
-    // Auto-focus input field when popup opens
-    if (textareaRef.current) {
-      textareaRef.current.focus();
-    }
+        if (storedCampaignData) {
+          const data = JSON.parse(storedCampaignData);
+          setCampaigns(data);
+          setCampaignDataText(data.map((c: Campaign) => `${c.name}    ${c.id}`).join("\n"));
+        }
+
+        if (storedBaseUrl) {
+          setBaseUrl(storedBaseUrl);
+        }
+
+        if (storedIndex) {
+          setCurrentIndex(parseInt(storedIndex, 10));
+        }
+
+        if (storedCompletedCampaigns) {
+          const completedIndices = JSON.parse(storedCompletedCampaigns);
+          setCompletedCampaigns(new Set(completedIndices));
+        }
+
+        const storedAutoClick = localStorage.getItem(STORAGE_KEYS.AUTO_CLICK_ENABLED);
+        if (storedAutoClick !== null) {
+          setAutoClickEnabled(storedAutoClick === "true");
+        }
+      } catch (error) {
+        console.error("Failed to load stored data:", error);
+      }
+    };
+
+    loadStoredData();
   }, []);
 
-  const saveTodos = (newTodos: Todo[]) => {
-    const sortedTodos = sortTodosByPriority(newTodos);
-    setTodos(sortedTodos);
-    if (typeof chrome !== "undefined" && chrome.storage) {
-      chrome.storage.local.set({ todos: sortedTodos });
+  /**
+   * Parse and save campaign data from textarea
+   * Format: "name    id" (one per line)
+   * Preserves the exact order from input
+   */
+  const saveCampaignData = () => {
+    try {
+      // Parse campaign data from textarea (split by newlines, extract name and id)
+      // Filter empty lines first to preserve order of non-empty entries
+      const parsedCampaigns = campaignDataText
+        .split("\n")
+        .filter(line => line.trim().length > 0)
+        .map(line => {
+          // Split by multiple spaces/tabs to separate name and id
+          const parts = line.trim().split(/\s{2,}|\t+/);
+          if (parts.length >= 2) {
+            return {
+              name: parts[0].trim(),
+              id: parts[parts.length - 1].trim(),
+            };
+          }
+          return null;
+        })
+        .filter((c): c is Campaign => c !== null);
+
+      setCampaigns(parsedCampaigns);
+      localStorage.setItem(STORAGE_KEYS.CAMPAIGN_DATA, JSON.stringify(parsedCampaigns));
+
+      // Reset index when saving new campaign data
+      setCurrentIndex(0);
+      localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, "0");
+
+      // Show success toast
+      toast.success(`Campaign data saved (${parsedCampaigns.length} campaigns)`);
+
+      // setIsSettingsView(false);
+    } catch (error) {
+      console.error("Failed to save campaign data:", error);
+      toast.error("Failed to save campaign data");
     }
   };
-
-  const executeCommand = (command: string) => {
-    const cmd = command.toLowerCase();
-
-    if (cmd === "clear") {
-      saveTodos([]);
-    } else if (cmd === "markdown" || cmd === "export") {
-      setIsExportView(true);
-    }
-
-    setInputValue("");
-    setIsCommandMode(false);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = TEXTAREA_MIN_HEIGHT;
-    }
-  };
-
-  const addTodo = () => {
-    if (inputValue.trim()) {
-      if (isCommandMode) {
-        executeCommand(inputValue.trim());
-        return;
-      }
-
-      const text = inputValue.trim();
-      const now = Date.now();
-
-      // Parse priority from text (e.g., "task /high" → high priority)
-      let priority: Priority = "low";
-      let cleanText = text;
-
-      if (cleanText.includes("/high")) {
-        priority = "high";
-        cleanText = cleanText.replace(/\/high/g, "").trim();
-      } else if (cleanText.includes("/medium")) {
-        priority = "medium";
-        cleanText = cleanText.replace(/\/medium/g, "").trim();
-      } else if (cleanText.includes("/low")) {
-        priority = "low";
-        cleanText = cleanText.replace(/\/low/g, "").trim();
-      }
-
-      const newTodo: Todo = {
-        id: now.toString(),
-        text: cleanText,
-        completed: false,
-        createdAt: now,
-        priority: priority,
-      };
-      saveTodos([...todos, newTodo]);
-      setInputValue("");
-      if (textareaRef.current) {
-        textareaRef.current.style.height = TEXTAREA_MIN_HEIGHT;
-      }
-    }
-  };
-
-  // Auto-expand textarea as user types
-  React.useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = TEXTAREA_MIN_HEIGHT;
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-    }
-  }, [inputValue]);
 
   /**
-   * GitHub PR URL extraction - fetches PR title if on GitHub PR page.
-   * Falls back to plain URL if not a PR or title extraction fails.
+   * Save base URL to localStorage
    */
-  const pasteCurrentUrl = async () => {
-    if (typeof chrome !== "undefined" && chrome.tabs) {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab.url && tab.id) {
-        const url = tab.url;
-        const prMatch = url.match(/\/pull\/(\d+)/);
+  const saveBaseUrl = () => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.BASE_URL, baseUrl);
+      toast.success("Base URL saved successfully");
+      setIsSettingsView(false);
+    } catch (error) {
+      console.error("Failed to save base URL:", error);
+      toast.error("Failed to save base URL");
+    }
+  };
 
-        if (prMatch) {
-          const prNumber = prMatch[1];
-          try {
-            // Inject script to extract PR title from GitHub DOM
-            const [result] = await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              func: () => {
-                const titleElement = document.querySelector('.js-issue-title.markdown-title');
-                return titleElement?.textContent?.trim() || null;
-              }
-            });
-            const title = result?.result;
+  /**
+   * Toggle auto-click feature on/off
+   */
+  const toggleAutoClick = () => {
+    try {
+      const newValue = !autoClickEnabled;
+      setAutoClickEnabled(newValue);
+      localStorage.setItem(STORAGE_KEYS.AUTO_CLICK_ENABLED, newValue.toString());
+      toast.success(newValue ? "Auto-click enabled" : "Auto-click disabled");
+    } catch (error) {
+      console.error("Failed to toggle auto-click:", error);
+      toast.error("Failed to update auto-click setting");
+    }
+  };
 
-            // Format as markdown link with PR number and title
-            if (title) {
-              setInputValue(`[PR #${prNumber}: ${title}](${url})`);
-            } else {
-              setInputValue(`[PR #${prNumber}](${url})`);
-            }
-          } catch (error) {
-            // Fallback if script injection fails
-            setInputValue(`[PR #${prNumber}](${url})`);
-          }
-        } else {
-          setInputValue(url);
+  /**
+   * Clear all data from localStorage and reset state
+   */
+  const clearAllData = () => {
+    try {
+      // Clear all localStorage items
+      Object.values(STORAGE_KEYS).forEach(key => {
+        localStorage.removeItem(key);
+      });
+
+      // Reset all state
+      setCampaignDataText("");
+      setBaseUrl("");
+      setCampaigns([]);
+      setCurrentIndex(0);
+      setCompletedCampaigns(new Set());
+      setAutoClickEnabled(true);
+    } catch (error) {
+      console.error("Failed to clear data:", error);
+    }
+  };
+
+  /**
+   * Navigate to a specific campaign by index
+   */
+  const navigateToCampaign = async (index: number) => {
+    if (campaigns.length === 0) {
+      console.error("No campaigns available");
+      return;
+    }
+
+    if (!baseUrl.trim()) {
+      console.error("No base URL provided");
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      // Get campaign at the specified index
+      const campaign = campaigns[index];
+
+      // Replace campaign_id parameter in the base URL
+      const urlObj = new URL(baseUrl);
+      urlObj.searchParams.set("campaign_id", campaign.id);
+      const newUrl = urlObj.toString();
+
+      if (typeof chrome !== "undefined" && chrome.tabs) {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+        if (tab.id) {
+          // Update the tab's URL
+          await chrome.tabs.update(tab.id, { url: newUrl });
+
+          // Update current index
+          setCurrentIndex(index);
+          localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, index.toString());
+
+          // Mark campaign as completed
+          const updatedCompleted = new Set(completedCampaigns);
+          updatedCompleted.add(index);
+          setCompletedCampaigns(updatedCompleted);
+          localStorage.setItem(STORAGE_KEYS.COMPLETED_CAMPAIGNS, JSON.stringify(Array.from(updatedCompleted)));
+
+          // Close the popup after successful navigation
+          window.close();
         }
       }
-    }
-  };
-
-  const exportToMarkdown = async () => {
-    try {
-      await navigator.clipboard.writeText(generateMarkdown(todos));
     } catch (error) {
-      console.error("Failed to copy to clipboard:", error);
+      console.error("Failed to navigate to campaign:", error);
+      setIsLoading(false);
     }
   };
-
-  const toggleTodo = (id: string) => {
-    const newTodos = todos.map((todo) => {
-      if (todo.id === id) {
-        return { ...todo, completed: !todo.completed };
-      }
-      return todo;
-    });
-    saveTodos(newTodos);
-  };
-
-  const deleteTodo = (id: string) => {
-    const newTodos = todos.filter((todo) => todo.id !== id);
-    saveTodos(newTodos);
-  };
-
-  const editTodo = (id: string, newText: string) => {
-    const newTodos = todos.map((todo) => {
-      if (todo.id === id) {
-        return { ...todo, text: newText };
-      }
-      return todo;
-    });
-    saveTodos(newTodos);
-  };
-
-  const changePriority = (id: string, priority: Priority) => {
-    const newTodos = todos.map((todo) => {
-      if (todo.id === id) {
-        return { ...todo, priority };
-      }
-      return todo;
-    });
-    saveTodos(newTodos);
-  };
-
-  const handleDragStart = (event: DragStartEvent) => {
-    setActiveId(event.active.id as string);
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    setActiveId(null);
-
-    if (!over) return;
-
-    const activeId = active.id as string;
-    const overId = over.id as string;
-
-    const oldIndex = todos.findIndex((t) => t.id === activeId);
-    const newIndex = todos.findIndex((t) => t.id === overId);
-
-    if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
-      const newTodos = arrayMove(todos, oldIndex, newIndex);
-      saveTodos(newTodos);
-    }
-  };
-
-  const activeTodo = todos.find((todo) => todo.id === activeId);
-  const totalCount = todos.length;
-
-  const copyMarkdown = async () => {
-    try {
-      await navigator.clipboard.writeText(generateMarkdown(todos));
-    } catch (error) {
-      console.error("Failed to copy to clipboard:", error);
-    }
-  };
-
-  // Auto-focus input when returning from export view
-  React.useEffect(() => {
-    if (!isExportView && textareaRef.current) {
-      textareaRef.current.focus();
-    }
-  }, [isExportView]);
-
-  if (isExportView) {
-    return (
-      <ExportView
-        markdown={generateMarkdown(todos)}
-        onBack={() => setIsExportView(false)}
-        onCopy={copyMarkdown}
-      />
-    );
-  }
 
   return (
-    <div className="dark bg-transparent" style={{ width: POPUP_WIDTH, height: POPUP_HEIGHT }}>
-      <div className="h-full flex flex-col p-4">
-        <Card className="flex-1 flex flex-col shadow-xl border-border">
-          <CardHeader className="space-y-2">
-            <TodoHeader
-              totalCount={totalCount}
-              onExportToMarkdown={exportToMarkdown}
-              onPasteCurrentUrl={pasteCurrentUrl}
-            />
-
-            <TodoInput
-              value={inputValue}
-              onChange={setInputValue}
-              onSubmit={addTodo}
-              isCommandMode={isCommandMode}
-              onToggleCommandMode={() => {
-                setIsCommandMode(!isCommandMode);
-                setInputValue("");
-                setSelectedCommandIndex(0);
-              }}
-              commands={availableCommands}
-              selectedCommandIndex={selectedCommandIndex}
-              onNavigateCommands={(direction) => {
-                if (direction === "next") {
-                  const nextIndex = (selectedCommandIndex + 1) % availableCommands.length;
-                  setSelectedCommandIndex(nextIndex);
-                  setInputValue(availableCommands[nextIndex].name);
-                } else {
-                  const prevIndex = (selectedCommandIndex - 1 + availableCommands.length) % availableCommands.length;
-                  setSelectedCommandIndex(prevIndex);
-                  setInputValue(availableCommands[prevIndex].name);
-                }
-              }}
-              onSelectCommand={setInputValue}
-              onEscape={() => {
-                setIsCommandMode(false);
-                setInputValue("");
-                setSelectedCommandIndex(0);
-              }}
-              textareaRef={textareaRef}
-            />
-          </CardHeader>
-
-          <div className="px-6 relative flex items-center justify-center">
-            <div className="absolute inset-x-0 h-[2px] bg-border" />
-            <div className="relative bg-background px-2">
-              <ChevronDown className="w-4 h-4 text-muted-foreground" />
+    <div className="bg-white" style={{ width: POPUP_WIDTH, height: "300px" }}>
+      <Toaster duration={1500} position="top-center" />
+      <div className="flex flex-col p-4 space-y-4 overflow-y-auto">
+        {isSettingsView ? (
+          /* Settings View */
+          <>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => setIsSettingsView(false)}
+                >
+                  <ChevronLeft className="size-5" />
+                </Button>
+                {/* Settings */}
+                <h2 className="text-2xl font-semibold text-foreground">설정</h2>
+              </div>
+              <Button
+                onClick={clearAllData}
+                disabled={isLoading}
+                variant="destructive"
+                className="w-fit shadow-brutal-button rounded-none"
+                size="sm"
+              >
+                <Trash2 className="size-4" />
+                Clear All Data
+              </Button>
             </div>
-          </div>
 
-          <CardContent className="flex-1 flex flex-col pb-4 transition-all duration-200">
-            <DndContext
-              sensors={sensors}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-            >
-              <div className="flex-1 flex flex-col overflow-hidden transition-all duration-200">
-                <DroppableSection
-                  id="main-section"
-                  todos={todos}
-                  onToggle={toggleTodo}
-                  onDelete={deleteTodo}
-                  onEdit={editTodo}
-                  onPriorityChange={changePriority}
+            <div className="space-y-6">
+              {/* Campaign Data Input */}
+              <div className="space-y-2">
+                <label htmlFor="campaign-data" className="font-bold text-xl text-foreground">
+                  Campaign Name & ID
+                </label>
+                <Textarea
+                  id="campaign-data"
+                  placeholder="CNT-CleansingOil-200ml_250512_PH_ProductGMV    1831881764572194&#10;CNT-DoubleCleansingDuo-None_250512_PH_ProductGMV    1831884518268977"
+                  value={campaignDataText}
+                  onChange={(e) => setCampaignDataText(e.target.value)}
+                  className="h-[200px] font-mono text-xs"
+                  disabled={isLoading}
                 />
+                <Button
+                  onClick={saveCampaignData}
+                  disabled={!campaignDataText.trim() || isLoading}
+                  className="shadow-brutal-button rounded-none"
+                  size="sm"
+                >
+                  <Save className="mr-2 h-4 w-4" />
+                  Save Campaign Data ({campaignDataText.split("\n").filter(line => line.trim()).length} campaigns)
+                </Button>
               </div>
 
-              <DragOverlay>
-                {activeId && activeTodo && <DragOverlayPreview todo={activeTodo} />}
-              </DragOverlay>
-            </DndContext>
-          </CardContent>
-        </Card>
+              {/* Base URL Input */}
+              <div className="space-y-2">
+                <label htmlFor="base-url" className="font-bold text-xl text-foreground">
+                  Base URL
+                </label>
+                <Textarea
+                  id="base-url"
+                  placeholder="https://ads.tiktok.com/i18n/gmv-max/dashboard?aadvid=123&campaign_id=1831881764572194&campaign_start_date=2025-01-01&campaign_end_date=2025-01-31"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  className="h-[100px] font-mono text-xs"
+                  disabled={isLoading}
+                />
+                {baseUrl.trim() && !hasRequiredDateParams && (
+                  <p className="text-sm text-destructive font-medium">
+                    Please select the campaign start date and end date in the URL parameters. The URL must include both "campaign_start_date" and "campaign_end_date" parameters.
+                  </p>
+                )}
+                <Button
+                  onClick={saveBaseUrl}
+                  disabled={!baseUrl.trim() || !hasRequiredDateParams || isLoading}
+                  className="shadow-brutal-button rounded-none"
+                  size="sm"
+                >
+                  <Save className="size-4" />
+                  Save Base URL
+                </Button>
+              </div>
+
+              {/* Auto-Click Toggle */}
+              <div className="space-y-2">
+                <label className="font-bold text-xl text-foreground">
+                  Auto-Click Export Button
+                </label>
+                <div className="flex items-center justify-between p-4 border rounded-md">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">
+                      Automatically click export button
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      When enabled, the extension will automatically click the export button when you navigate to a campaign page
+                    </p>
+                  </div>
+                  <Switch
+                    checked={autoClickEnabled}
+                    onCheckedChange={toggleAutoClick}
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
+          /* Campaign List View */
+          <>
+            <div className="flex items-start justify-between">
+              <div className="flex flex-col items-start gap-2">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-2xl font-semibold text-foreground">
+                    {/* Campaign Navigator */}
+                    캠페인 네비게이터
+                  </h2>
+                  <Badge>team-mint.io</Badge>
+                  <Badge variant="secondary">Global Team</Badge>
+                </div>
+                <div className="text-xs text-muted-foreground font-mono">
+                  {/* Total {campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''} available */}
+                  총 {campaigns.length}개의 캠페인이 가능합니다
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsSettingsView(true)}
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+            </div>
+
+
+            {/* Campaign List */}
+            {campaigns.length > 0 ? (
+              <div className="flex flex-col justify-center items-center space-y-2">
+                {campaigns.map((campaign, index) => {
+                  const isCompleted = completedCampaigns.has(index);
+                  return (
+                    <Button
+                      key={`${campaign.id}-${index}`}
+                      onClick={() => navigateToCampaign(index)}
+                      disabled={!baseUrl.trim() || isLoading}
+                      variant={index === currentIndex ? "default" : "outline"}
+                      className={`w-full justify-start text-left h-auto py-3 px-4 shadow-brutal-button rounded-none ${isCompleted ? "border-2 border-green-500" : ""
+                        }`}
+                    >
+                      <div className="flex flex-col items-start w-full space-y-1">
+                        <div className="font-medium text-sm truncate w-full">
+                          {campaign.name}
+                        </div>
+                        <div className="text-xs text-muted-foreground font-mono">
+                          {campaign.id}
+                        </div>
+                      </div>
+                    </Button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="py-12 text-center">
+                {/* <p className="text-muted-foreground mb-4">No campaigns configured</p> */}
+                <Button
+                  onClick={() => setIsSettingsView(true)}
+                  variant="default"
+                >
+                  <Settings className="mr-2 h-4 w-4" />
+                  Configure Campaigns
+                </Button>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

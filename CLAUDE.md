@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A Next.js 15.5 web application bootstrapped with `create-next-app`, built with React 19, TypeScript, and Tailwind CSS 4. This is a fresh project scaffold intended to be developed into a todo application with browser extension capabilities.
+A Chrome extension built with Next.js 15.5, React 19, TypeScript, and Tailwind CSS 4. The extension provides a simple URL replacer popup that allows users to navigate the current tab to a new URL by entering it in an input field and clicking a button.
 
 ## Development Commands
 

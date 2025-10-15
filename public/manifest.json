@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Todo App",
+  "name": "[team-mint.io] 캠페인 네비게이터",
   "version": "1.0.0",
-  "description": "A simple todo app Chrome extension",
+  "description": "Quick campaign navigator for GMV Max",
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -14,15 +14,30 @@
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["https://ads.tiktok.com/i18n/gmv-max/dashboard*"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
   "permissions": [
     "storage",
     "tabs",
     "activeTab",
-    "scripting"
+    "scripting",
+    "identity",
+    "downloads"
   ],
   "host_permissions": [
-    "https://github.com/*"
+    "<all_urls>"
   ],
+  "oauth2": {
+    "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.file"
+    ]
+  },
   "icons": {
     "16": "icon16.png",
     "48": "icon48.png",
