@@ -40,3 +40,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# service account credentials (SENSITIVE)
+extension/config/service-account.ts
+extension/config/service-account.json
+.serena/project.yml
+CREDENTIAL_TROUBLESHOOTING.md

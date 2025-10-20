@@ -5,11 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { POPUP_WIDTH } from "./constants/ui";
-import { ChevronLeft, Save, Settings, Trash2 } from "lucide-react";
+import { ChevronLeft, Settings, Trash2, Loader2, CheckCircle2, XCircle, Cat, FolderOpen } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { brutalismActiveClassName } from "@/lib/className";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
+import { detectRegionFromCampaign } from "./utils/region-detector";
 
 /**
  * Campaign Navigator popup component for Chrome extension.
@@ -26,12 +26,21 @@ interface Campaign {
   id: string;
 }
 
+interface UploadStatus {
+  status: "started" | "success" | "error";
+  campaignName: string;
+  fileName?: string;
+  error?: string;
+}
+
 const STORAGE_KEYS = {
   CAMPAIGN_DATA: "gmv_max_campaign_data",
   BASE_URL: "gmv_max_base_url",
   CURRENT_INDEX: "gmv_max_current_index",
   COMPLETED_CAMPAIGNS: "gmv_max_completed_campaigns",
   AUTO_CLICK_ENABLED: "gmv_max_auto_click_enabled",
+  LAST_UPLOAD_STATUS: "lastUploadStatus",
+  UPLOAD_SUCCESS_STATUS: "gmv_max_upload_success_status", // Persistent upload success tracking
 };
 
 export default function URLReplacerPopup() {
@@ -43,6 +52,10 @@ export default function URLReplacerPopup() {
   const [isSettingsView, setIsSettingsView] = React.useState(false);
   const [completedCampaigns, setCompletedCampaigns] = React.useState<Set<number>>(new Set());
   const [autoClickEnabled, setAutoClickEnabled] = React.useState(true);
+  const [uploadStatuses, setUploadStatuses] = React.useState<Map<string, UploadStatus>>(new Map());
+  const activeToastsRef = React.useRef<Map<string, string | number>>(new Map());
+  const [lastSavedCampaignData, setLastSavedCampaignData] = React.useState("");
+  const [lastSavedBaseUrl, setLastSavedBaseUrl] = React.useState("");
 
   // Check if base URL contains required date parameters
   const hasRequiredDateParams = React.useMemo(() => {
@@ -55,6 +68,13 @@ export default function URLReplacerPopup() {
     } catch {
       return false;
     }
+  }, [baseUrl]);
+
+  // Check if base URL starts with the correct product dashboard path
+  const hasValidProductUrl = React.useMemo(() => {
+    if (!baseUrl.trim()) return false;
+    const requiredBasePath = "https://ads.tiktok.com/i18n/gmv-max/dashboard/product";
+    return baseUrl.startsWith(requiredBasePath);
   }, [baseUrl]);
 
   // Load stored data on mount
@@ -89,6 +109,20 @@ export default function URLReplacerPopup() {
         if (storedAutoClick !== null) {
           setAutoClickEnabled(storedAutoClick === "true");
         }
+
+        // Load persisted upload success statuses
+        const storedUploadSuccessStatus = localStorage.getItem(STORAGE_KEYS.UPLOAD_SUCCESS_STATUS);
+        if (storedUploadSuccessStatus) {
+          const successStatuses = JSON.parse(storedUploadSuccessStatus);
+          const statusMap = new Map<string, UploadStatus>();
+
+          // Convert stored object to Map
+          Object.entries(successStatuses).forEach(([campaignName, status]) => {
+            statusMap.set(campaignName, status as UploadStatus);
+          });
+
+          setUploadStatuses(statusMap);
+        }
       } catch (error) {
         console.error("Failed to load stored data:", error);
       }
@@ -97,12 +131,123 @@ export default function URLReplacerPopup() {
     loadStoredData();
   }, []);
 
+  // Listen for upload status updates from background script
+  React.useEffect(() => {
+    const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
+      if (areaName === "local" && changes[STORAGE_KEYS.LAST_UPLOAD_STATUS]) {
+        const statusMessage = changes[STORAGE_KEYS.LAST_UPLOAD_STATUS].newValue as UploadStatus;
+
+        if (statusMessage) {
+          // Update upload statuses map
+          setUploadStatuses((prev) => {
+            const newMap = new Map(prev);
+            newMap.set(statusMessage.campaignName, statusMessage);
+
+            // Persist success status to localStorage
+            if (statusMessage.status === "success") {
+              const storedSuccessStatuses = localStorage.getItem(STORAGE_KEYS.UPLOAD_SUCCESS_STATUS);
+              const successStatuses = storedSuccessStatuses ? JSON.parse(storedSuccessStatuses) : {};
+
+              // Store the success status permanently
+              successStatuses[statusMessage.campaignName] = statusMessage;
+              localStorage.setItem(STORAGE_KEYS.UPLOAD_SUCCESS_STATUS, JSON.stringify(successStatuses));
+            }
+
+            return newMap;
+          });
+
+          // Show toast notifications
+          if (statusMessage.status === "success") {
+            // Dismiss loading toast if it exists
+            const loadingToastId = activeToastsRef.current.get(statusMessage.campaignName);
+            if (loadingToastId) {
+              toast.dismiss(loadingToastId);
+              activeToastsRef.current.delete(statusMessage.campaignName);
+            }
+            toast.success("업로드 완료!");
+          } else if (statusMessage.status === "error") {
+            // Dismiss loading toast if it exists
+            const loadingToastId = activeToastsRef.current.get(statusMessage.campaignName);
+            if (loadingToastId) {
+              toast.dismiss(loadingToastId);
+              activeToastsRef.current.delete(statusMessage.campaignName);
+            }
+            toast.error(`Upload failed: ${statusMessage.error || "Unknown error"}`);
+          } else if (statusMessage.status === "started") {
+            // Store the loading toast ID
+            const toastId = toast.loading(`Uploading to Google Drive...`);
+            activeToastsRef.current.set(statusMessage.campaignName, toastId);
+          }
+        }
+      }
+    };
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+
+    // Load initial upload status
+    chrome.storage.local.get([STORAGE_KEYS.LAST_UPLOAD_STATUS], (result) => {
+      if (result[STORAGE_KEYS.LAST_UPLOAD_STATUS]) {
+        const statusMessage = result[STORAGE_KEYS.LAST_UPLOAD_STATUS] as UploadStatus;
+        setUploadStatuses((prev) => {
+          const newMap = new Map(prev);
+          newMap.set(statusMessage.campaignName, statusMessage);
+          return newMap;
+        });
+      }
+    });
+
+    return () => {
+      chrome.storage.onChanged.removeListener(handleStorageChange);
+    };
+  }, []);
+
+  /**
+   * Auto-save campaign data when it changes (debounced)
+   */
+  React.useEffect(() => {
+    if (!campaignDataText.trim()) return;
+
+    const timer = setTimeout(() => {
+      saveCampaignData(true); // Pass true for silent save
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timer);
+  }, [campaignDataText]);
+
+  /**
+   * Auto-save base URL when it changes (debounced)
+   */
+  React.useEffect(() => {
+    if (!baseUrl.trim()) return;
+
+    const timer = setTimeout(() => {
+      saveBaseUrl(true); // Pass true for silent save
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timer);
+  }, [baseUrl]);
+
+  /**
+   * Auto-save when navigating back to main page
+   */
+  React.useEffect(() => {
+    if (!isSettingsView) {
+      // Save both when navigating back
+      if (campaignDataText.trim()) {
+        saveCampaignData(true);
+      }
+      if (baseUrl.trim()) {
+        saveBaseUrl(true);
+      }
+    }
+  }, [isSettingsView]);
+
   /**
    * Parse and save campaign data from textarea
    * Format: "name    id" (one per line)
    * Preserves the exact order from input
    */
-  const saveCampaignData = () => {
+  const saveCampaignData = (silent = false) => {
     try {
       // Parse campaign data from textarea (split by newlines, extract name and id)
       // Filter empty lines first to preserve order of non-empty entries
@@ -123,14 +268,25 @@ export default function URLReplacerPopup() {
         .filter((c): c is Campaign => c !== null);
 
       setCampaigns(parsedCampaigns);
+
+      // Save to localStorage for popup state
       localStorage.setItem(STORAGE_KEYS.CAMPAIGN_DATA, JSON.stringify(parsedCampaigns));
+
+      // Save to chrome.storage.local to trigger content script updates
+      chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_DATA]: parsedCampaigns });
 
       // Reset index when saving new campaign data
       setCurrentIndex(0);
       localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, "0");
+      chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: "0" });
 
-      // Show success toast
-      toast.success(`Campaign data saved (${parsedCampaigns.length} campaigns)`);
+      // Update last saved state for UI indicator
+      setLastSavedCampaignData(campaignDataText);
+
+      // Show success toast only if not silent
+      if (!silent) {
+        toast.success(`Campaign data saved (${parsedCampaigns.length} campaigns)`);
+      }
 
       // setIsSettingsView(false);
     } catch (error) {
@@ -140,13 +296,24 @@ export default function URLReplacerPopup() {
   };
 
   /**
-   * Save base URL to localStorage
+   * Save base URL to localStorage and chrome.storage.local
    */
-  const saveBaseUrl = () => {
+  const saveBaseUrl = (silent = false) => {
     try {
+      // Save to localStorage for popup state
       localStorage.setItem(STORAGE_KEYS.BASE_URL, baseUrl);
-      toast.success("Base URL saved successfully");
-      setIsSettingsView(false);
+
+      // Save to chrome.storage.local to trigger content script updates
+      chrome.storage.local.set({ [STORAGE_KEYS.BASE_URL]: baseUrl });
+
+      // Update last saved state for UI indicator
+      setLastSavedBaseUrl(baseUrl);
+
+      // Show success toast only if not silent
+      if (!silent) {
+        toast.success("Base URL saved successfully");
+        setIsSettingsView(false);
+      }
     } catch (error) {
       console.error("Failed to save base URL:", error);
       toast.error("Failed to save base URL");
@@ -169,14 +336,19 @@ export default function URLReplacerPopup() {
   };
 
   /**
-   * Clear all data from localStorage and reset state
+   * Clear all data from localStorage and chrome.storage.local, then reset state
    */
-  const clearAllData = () => {
+  const clearAllData = async () => {
     try {
       // Clear all localStorage items
       Object.values(STORAGE_KEYS).forEach(key => {
         localStorage.removeItem(key);
       });
+
+      // Clear chrome.storage.local items
+      if (typeof chrome !== "undefined" && chrome.storage) {
+        await chrome.storage.local.clear();
+      }
 
       // Reset all state
       setCampaignDataText("");
@@ -185,15 +357,73 @@ export default function URLReplacerPopup() {
       setCurrentIndex(0);
       setCompletedCampaigns(new Set());
       setAutoClickEnabled(true);
+      setUploadStatuses(new Map());
+
+      toast.success("All data cleared successfully");
     } catch (error) {
       console.error("Failed to clear data:", error);
+      toast.error("Failed to clear all data");
     }
   };
 
   /**
-   * Navigate to a specific campaign by index
+   * Navigate to Google Drive folder for a specific campaign
    */
-  const navigateToCampaign = async (index: number) => {
+  const navigateToGoogleDrive = async (index: number, event: React.MouseEvent) => {
+    event.stopPropagation();
+
+    if (campaigns.length === 0) {
+      console.error("No campaigns available");
+      toast.error("No campaigns available");
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      // Get campaign at the specified index
+      const campaign = campaigns[index];
+
+      // Detect region from campaign name
+      const regionInfo = detectRegionFromCampaign(campaign.name);
+      if (!regionInfo) {
+        toast.error(`Could not detect region from campaign name: ${campaign.name}`);
+        setIsLoading(false);
+        return;
+      }
+
+      // Construct Google Drive folder URL
+      // Campaign folders are created inside the parent folder, so we navigate to the parent
+      const googleDriveFolderUrl = `https://drive.google.com/drive/folders/${regionInfo.folderId}`;
+
+      if (typeof chrome !== "undefined" && chrome.tabs) {
+        // Open Google Drive folder in a new tab
+        await chrome.tabs.create({ url: googleDriveFolderUrl });
+
+        // Update current index
+        setCurrentIndex(index);
+        localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, index.toString());
+
+        // Show success toast
+        toast.success(`Opening Google Drive folder for ${regionInfo.region}`);
+
+        // Close the popup after successful navigation
+        window.close();
+      }
+    } catch (error) {
+      console.error("Failed to navigate to Google Drive:", error);
+      toast.error("Failed to open Google Drive folder");
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Trigger download->upload workflow (Cat button)
+   * This initiates the auto-click download and Google Drive upload process
+   */
+  const triggerWorkflow = async (index: number, event: React.MouseEvent) => {
+    event.stopPropagation();
+
     if (campaigns.length === 0) {
       console.error("No campaigns available");
       return;
@@ -219,28 +449,58 @@ export default function URLReplacerPopup() {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
         if (tab.id) {
-          // Update the tab's URL
+          // Update the tab's URL to navigate and trigger auto-click
           await chrome.tabs.update(tab.id, { url: newUrl });
 
           // Update current index
           setCurrentIndex(index);
           localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, index.toString());
 
-          // Mark campaign as completed
-          const updatedCompleted = new Set(completedCampaigns);
-          updatedCompleted.add(index);
-          setCompletedCampaigns(updatedCompleted);
-          localStorage.setItem(STORAGE_KEYS.COMPLETED_CAMPAIGNS, JSON.stringify(Array.from(updatedCompleted)));
+          // Show toast notification
+          toast.success(`Workflow started for ${campaign.name}`);
 
           // Close the popup after successful navigation
           window.close();
         }
       }
     } catch (error) {
-      console.error("Failed to navigate to campaign:", error);
+      console.error("Failed to trigger workflow:", error);
+      toast.error("Failed to start workflow");
       setIsLoading(false);
     }
   };
+
+  // Check if any upload is currently in progress or recently completed
+  const uploadStatusInfo = React.useMemo(() => {
+    for (const [campaignName, status] of uploadStatuses.entries()) {
+      if (status.status === "started") {
+        return { campaignName, status, type: "uploading" as const };
+      }
+    }
+    // Check if the most recent status update was a success (within the last few seconds)
+    for (const [campaignName, status] of uploadStatuses.entries()) {
+      if (status.status === "success") {
+        return { campaignName, status, type: "completed" as const };
+      }
+    }
+    return null;
+  }, [uploadStatuses]);
+
+  // Auto-hide the completed status after 3 seconds
+  React.useEffect(() => {
+    if (uploadStatusInfo?.type === "completed") {
+      const timer = setTimeout(() => {
+        // Remove the completed status from the map to hide the indicator
+        setUploadStatuses((prev) => {
+          const newMap = new Map(prev);
+          newMap.delete(uploadStatusInfo.campaignName);
+          return newMap;
+        });
+      }, 3000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [uploadStatusInfo]);
 
   return (
     <div className="bg-white" style={{ width: POPUP_WIDTH, height: "300px" }}>
@@ -275,9 +535,17 @@ export default function URLReplacerPopup() {
             <div className="space-y-6">
               {/* Campaign Data Input */}
               <div className="space-y-2">
-                <label htmlFor="campaign-data" className="font-bold text-xl text-foreground">
-                  Campaign Name & ID
-                </label>
+                <div className="flex items-center justify-between">
+                  <label htmlFor="campaign-data" className="font-bold text-xl text-foreground">
+                    Campaign Name & ID
+                  </label>
+                  {campaignDataText.trim() && lastSavedCampaignData === campaignDataText && (
+                    <div className="flex items-center gap-1 text-xs text-green-600">
+                      <CheckCircle2 className="size-3" />
+                      <span>Saved</span>
+                    </div>
+                  )}
+                </div>
                 <Textarea
                   id="campaign-data"
                   placeholder="CNT-CleansingOil-200ml_250512_PH_ProductGMV    1831881764572194&#10;CNT-DoubleCleansingDuo-None_250512_PH_ProductGMV    1831884518268977"
@@ -286,22 +554,24 @@ export default function URLReplacerPopup() {
                   className="h-[200px] font-mono text-xs"
                   disabled={isLoading}
                 />
-                <Button
-                  onClick={saveCampaignData}
-                  disabled={!campaignDataText.trim() || isLoading}
-                  className="shadow-brutal-button rounded-none"
-                  size="sm"
-                >
-                  <Save className="mr-2 h-4 w-4" />
-                  Save Campaign Data ({campaignDataText.split("\n").filter(line => line.trim()).length} campaigns)
-                </Button>
+                <div className="text-xs text-muted-foreground">
+                  {campaignDataText.split("\n").filter(line => line.trim()).length} campaigns
+                </div>
               </div>
 
               {/* Base URL Input */}
               <div className="space-y-2">
-                <label htmlFor="base-url" className="font-bold text-xl text-foreground">
-                  Base URL
-                </label>
+                <div className="flex items-center justify-between">
+                  <label htmlFor="base-url" className="font-bold text-xl text-foreground">
+                    Base URL
+                  </label>
+                  {baseUrl.trim() && lastSavedBaseUrl === baseUrl && hasRequiredDateParams && hasValidProductUrl && (
+                    <div className="flex items-center gap-1 text-xs text-green-600">
+                      <CheckCircle2 className="size-3" />
+                      <span>Saved</span>
+                    </div>
+                  )}
+                </div>
                 <Textarea
                   id="base-url"
                   placeholder="https://ads.tiktok.com/i18n/gmv-max/dashboard?aadvid=123&campaign_id=1831881764572194&campaign_start_date=2025-01-01&campaign_end_date=2025-01-31"
@@ -310,20 +580,19 @@ export default function URLReplacerPopup() {
                   className="h-[100px] font-mono text-xs"
                   disabled={isLoading}
                 />
-                {baseUrl.trim() && !hasRequiredDateParams && (
+                {baseUrl.trim() && (!hasRequiredDateParams || !hasValidProductUrl) && (
                   <p className="text-sm text-destructive font-medium">
-                    Please select the campaign start date and end date in the URL parameters. The URL must include both "campaign_start_date" and "campaign_end_date" parameters.
+                    {!hasValidProductUrl && (
+                      <>The URL must start with "https://ads.tiktok.com/i18n/gmv-max/dashboard/product".</>
+                    )}
+                    {hasValidProductUrl && !hasRequiredDateParams && (
+                      <>Please select the campaign start date and end date in the URL parameters. The URL must include both "campaign_start_date" and "campaign_end_date" parameters.</>
+                    )}
+                    {!hasValidProductUrl && !hasRequiredDateParams && (
+                      <><br />Additionally, the URL must include both "campaign_start_date" and "campaign_end_date" parameters.</>
+                    )}
                   </p>
                 )}
-                <Button
-                  onClick={saveBaseUrl}
-                  disabled={!baseUrl.trim() || !hasRequiredDateParams || isLoading}
-                  className="shadow-brutal-button rounded-none"
-                  size="sm"
-                >
-                  <Save className="size-4" />
-                  Save Base URL
-                </Button>
               </div>
 
               {/* Auto-Click Toggle */}
@@ -367,41 +636,206 @@ export default function URLReplacerPopup() {
                   총 {campaigns.length}개의 캠페인이 가능합니다
                 </div>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsSettingsView(true)}
-              >
-                <Settings className="h-4 w-4" />
-              </Button>
+              <div className="flex items-center gap-2">
+                {campaigns.length > 0 && uploadStatusInfo && (
+                  /* Show upload status */
+                  <div className={`flex items-center gap-2 px-3 py-2 border-2 rounded-none shadow-brutal-button ${uploadStatusInfo.type === "uploading"
+                      ? "border-blue-500 bg-blue-50"
+                      : "border-green-500 bg-green-50"
+                    }`} style={{ width: "150px" }}>
+                    {uploadStatusInfo.type === "uploading" ? (
+                      <>
+                        <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
+                        <span className="text-sm font-medium text-blue-700">
+                          업로드 중...
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4 text-green-600" />
+                        <span className="text-sm font-medium text-green-700">
+                          업로드 완료!
+                        </span>
+                      </>
+                    )}
+                  </div>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsSettingsView(true)}
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
 
 
             {/* Campaign List */}
             {campaigns.length > 0 ? (
-              <div className="flex flex-col justify-center items-center space-y-2">
-                {campaigns.map((campaign, index) => {
-                  const isCompleted = completedCampaigns.has(index);
-                  return (
-                    <Button
-                      key={`${campaign.id}-${index}`}
-                      onClick={() => navigateToCampaign(index)}
-                      disabled={!baseUrl.trim() || isLoading}
-                      variant={index === currentIndex ? "default" : "outline"}
-                      className={`w-full justify-start text-left h-auto py-3 px-4 shadow-brutal-button rounded-none ${isCompleted ? "border-2 border-green-500" : ""
-                        }`}
-                    >
-                      <div className="flex flex-col items-start w-full space-y-1">
-                        <div className="font-medium text-sm truncate w-full">
-                          {campaign.name}
-                        </div>
-                        <div className="text-xs text-muted-foreground font-mono">
-                          {campaign.id}
-                        </div>
+              <div className="flex flex-col space-y-4">
+                {/* Completed Section */}
+                {(() => {
+                  const completedCampaignsList = campaigns
+                    .map((campaign, index) => ({ campaign, index }))
+                    .filter(({ campaign }) => uploadStatuses.get(campaign.name)?.status === "success");
+
+                  return completedCampaignsList.length > 0 ? (
+                    <div className="space-y-2">
+                      <h3 className="font-semibold text-sm text-foreground px-1">
+                        완료됨 ({completedCampaignsList.length})
+                      </h3>
+                      <div className="flex flex-col space-y-2">
+                        {completedCampaignsList.map(({ campaign, index }) => {
+                          const uploadStatus = uploadStatuses.get(campaign.name);
+
+                          return (
+                            <div
+                              key={`completed-${campaign.id}-${index}`}
+                              className={`w-full border-2 p-3 shadow-brutal-button rounded-none border-border bg-green-50/50`}
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                {/* Campaign Info */}
+                                <div className="flex flex-col items-start space-y-1 flex-1 min-w-0">
+                                  <div className="font-medium text-sm truncate w-full">
+                                    {campaign.name}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground font-mono truncate w-full">
+                                    {campaign.id}
+                                  </div>
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  {/* Workflow Status Indicator - only show loading or error */}
+                                  {uploadStatus && uploadStatus.status !== "success" && (
+                                    <div className="flex-shrink-0">
+                                      {uploadStatus.status === "started" && (
+                                        <Loader2 className="size-5 text-blue-500 animate-spin" />
+                                      )}
+                                      {uploadStatus.status === "error" && (
+                                        <XCircle className="size-5 text-red-500" />
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Cat Icon Button - Trigger download->upload workflow */}
+                                  <Button
+                                    onClick={(e) => triggerWorkflow(index, e)}
+                                    disabled={!baseUrl.trim() || isLoading}
+                                    variant="outline"
+                                    size="sm"
+                                    className="shadow-brutal-button rounded-none h-8 w-8 p-0"
+                                    title="Start download and upload workflow"
+                                  >
+                                    <Cat className="size-4" />
+                                  </Button>
+
+                                  {/* Google Drive Icon Button - Open Google Drive folder */}
+                                  <Button
+                                    onClick={(e) => navigateToGoogleDrive(index, e)}
+                                    disabled={isLoading}
+                                    variant="outline"
+                                    size="sm"
+                                    className="shadow-brutal-button rounded-none h-8 w-8 p-0"
+                                    title="Open Google Drive folder"
+                                  >
+                                    <FolderOpen className="size-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    </Button>
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* All Section */}
+                {(() => {
+                  const allCampaignsList = campaigns
+                    .map((campaign, index) => ({ campaign, index }))
+                    .filter(({ campaign }) => uploadStatuses.get(campaign.name)?.status !== "success");
+
+                  return (
+                    <div className="space-y-2">
+                      <h3 className="font-semibold text-sm text-foreground px-1">
+                        전체 ({allCampaignsList.length})
+                      </h3>
+                      {allCampaignsList.length > 0 ? (
+                        <div className="flex flex-col space-y-2">
+                          {allCampaignsList.map(({ campaign, index }) => {
+                            const uploadStatus = uploadStatuses.get(campaign.name);
+
+                            return (
+                              <div
+                                key={`all-${campaign.id}-${index}`}
+                                className={`w-full border-2 p-3 shadow-brutal-button rounded-none ${index === currentIndex ? "border-primary bg-primary/5" : "border-border"
+                                  }`}
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  {/* Campaign Info */}
+                                  <div className="flex flex-col items-start space-y-1 flex-1 min-w-0">
+                                    <div className="font-medium text-sm truncate w-full">
+                                      {campaign.name}
+                                    </div>
+                                    <div className="text-xs text-muted-foreground font-mono truncate w-full">
+                                      {campaign.id}
+                                    </div>
+                                  </div>
+
+                                  {/* Action Buttons */}
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    {/* Workflow Status Indicator */}
+                                    {uploadStatus && (
+                                      <div className="flex-shrink-0">
+                                        {uploadStatus.status === "started" && (
+                                          <Loader2 className="size-5 text-blue-500 animate-spin" />
+                                        )}
+                                        {uploadStatus.status === "error" && (
+                                          <XCircle className="size-5 text-red-500" />
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {/* Cat Icon Button - Trigger download->upload workflow */}
+                                    <Button
+                                      onClick={(e) => triggerWorkflow(index, e)}
+                                      disabled={!baseUrl.trim() || isLoading}
+                                      variant="outline"
+                                      size="sm"
+                                      className="shadow-brutal-button rounded-none h-8 w-8 p-0"
+                                      title="Start download and upload workflow"
+                                    >
+                                      <Cat className="size-4" />
+                                    </Button>
+
+                                    {/* Google Drive Icon Button - Open Google Drive folder */}
+                                    <Button
+                                      onClick={(e) => navigateToGoogleDrive(index, e)}
+                                      disabled={isLoading}
+                                      variant="outline"
+                                      size="sm"
+                                      className="shadow-brutal-button rounded-none h-8 w-8 p-0"
+                                      title="Open Google Drive folder"
+                                    >
+                                      <FolderOpen className="size-4" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-center py-4 text-sm text-muted-foreground">
+                          모든 캠페인이 완료되었습니다
+                        </div>
+                      )}
+                    </div>
                   );
-                })}
+                })()}
               </div>
             ) : (
               <div className="py-12 text-center">
