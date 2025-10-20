@@ -24,6 +24,7 @@ import { detectRegionFromCampaign } from "./utils/region-detector";
 interface Campaign {
   name: string;
   id: string;
+  region?: "PH" | "US" | "ID" | "MY";
 }
 
 interface UploadStatus {
@@ -41,6 +42,7 @@ const STORAGE_KEYS = {
   AUTO_CLICK_ENABLED: "gmv_max_auto_click_enabled",
   LAST_UPLOAD_STATUS: "lastUploadStatus",
   UPLOAD_SUCCESS_STATUS: "gmv_max_upload_success_status", // Persistent upload success tracking
+  CAMPAIGN_REGIONS: "gmv_max_campaign_regions", // Store region selections per campaign
 };
 
 export default function URLReplacerPopup() {
@@ -56,6 +58,7 @@ export default function URLReplacerPopup() {
   const activeToastsRef = React.useRef<Map<string, string | number>>(new Map());
   const [lastSavedCampaignData, setLastSavedCampaignData] = React.useState("");
   const [lastSavedBaseUrl, setLastSavedBaseUrl] = React.useState("");
+  const [campaignRegions, setCampaignRegions] = React.useState<Map<string, "PH" | "US" | "ID" | "MY">>(new Map());
 
   // Check if base URL contains required date parameters
   const hasRequiredDateParams = React.useMemo(() => {
@@ -122,6 +125,19 @@ export default function URLReplacerPopup() {
           });
 
           setUploadStatuses(statusMap);
+        }
+
+        // Load persisted region selections
+        const storedRegions = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_REGIONS);
+        if (storedRegions) {
+          const regions = JSON.parse(storedRegions);
+          const regionsMap = new Map<string, "PH" | "US" | "ID" | "MY">();
+
+          Object.entries(regions).forEach(([campaignId, region]) => {
+            regionsMap.set(campaignId, region as "PH" | "US" | "ID" | "MY");
+          });
+
+          setCampaignRegions(regionsMap);
         }
       } catch (error) {
         console.error("Failed to load stored data:", error);
@@ -367,6 +383,25 @@ export default function URLReplacerPopup() {
   };
 
   /**
+   * Handle region selection for a campaign
+   */
+  const handleRegionSelect = (campaignId: string, region: "PH" | "US" | "ID" | "MY") => {
+    setCampaignRegions((prev) => {
+      const newMap = new Map(prev);
+      newMap.set(campaignId, region);
+
+      // Persist to localStorage
+      const regionsObj: Record<string, string> = {};
+      newMap.forEach((value, key) => {
+        regionsObj[key] = value;
+      });
+      localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(regionsObj));
+
+      return newMap;
+    });
+  };
+
+  /**
    * Navigate to Google Drive folder for a specific campaign
    */
   const navigateToGoogleDrive = async (index: number, event: React.MouseEvent) => {
@@ -470,37 +505,15 @@ export default function URLReplacerPopup() {
     }
   };
 
-  // Check if any upload is currently in progress or recently completed
+  // Check if any upload is currently in progress
   const uploadStatusInfo = React.useMemo(() => {
     for (const [campaignName, status] of uploadStatuses.entries()) {
       if (status.status === "started") {
         return { campaignName, status, type: "uploading" as const };
       }
     }
-    // Check if the most recent status update was a success (within the last few seconds)
-    for (const [campaignName, status] of uploadStatuses.entries()) {
-      if (status.status === "success") {
-        return { campaignName, status, type: "completed" as const };
-      }
-    }
     return null;
   }, [uploadStatuses]);
-
-  // Auto-hide the completed status after 3 seconds
-  React.useEffect(() => {
-    if (uploadStatusInfo?.type === "completed") {
-      const timer = setTimeout(() => {
-        // Remove the completed status from the map to hide the indicator
-        setUploadStatuses((prev) => {
-          const newMap = new Map(prev);
-          newMap.delete(uploadStatusInfo.campaignName);
-          return newMap;
-        });
-      }, 3000);
-
-      return () => clearTimeout(timer);
-    }
-  }, [uploadStatusInfo]);
 
   return (
     <div className="bg-white" style={{ width: POPUP_WIDTH, height: "300px" }}>
@@ -637,27 +650,13 @@ export default function URLReplacerPopup() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {campaigns.length > 0 && uploadStatusInfo && (
-                  /* Show upload status */
-                  <div className={`flex items-center gap-2 px-3 py-2 border-2 rounded-none shadow-brutal-button ${uploadStatusInfo.type === "uploading"
-                      ? "border-blue-500 bg-blue-50"
-                      : "border-green-500 bg-green-50"
-                    }`} style={{ width: "150px" }}>
-                    {uploadStatusInfo.type === "uploading" ? (
-                      <>
-                        <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
-                        <span className="text-sm font-medium text-blue-700">
-                          업로드 중...
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="h-4 w-4 text-green-600" />
-                        <span className="text-sm font-medium text-green-700">
-                          업로드 완료!
-                        </span>
-                      </>
-                    )}
+                {campaigns.length > 0 && uploadStatusInfo && uploadStatusInfo.type === "uploading" && (
+                  /* Show upload status only when uploading */
+                  <div className="flex items-center gap-2 px-3 py-2 border-2 rounded-none shadow-brutal-button border-blue-500 bg-blue-50" style={{ width: "150px" }}>
+                    <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
+                    <span className="text-sm font-medium text-blue-700">
+                      업로드 중...
+                    </span>
                   </div>
                 )}
                 <Button
@@ -694,19 +693,21 @@ export default function URLReplacerPopup() {
                               key={`completed-${campaign.id}-${index}`}
                               className={`w-full border-2 p-3 shadow-brutal-button rounded-none border-border bg-green-50/50`}
                             >
-                              <div className="flex items-center justify-between gap-3">
-                                {/* Campaign Info */}
-                                <div className="flex flex-col items-start space-y-1 flex-1 min-w-0">
-                                  <div className="font-medium text-sm truncate w-full">
-                                    {campaign.name}
+                              <div className="flex flex-col gap-2">
+                                {/* Top Row: Campaign Info and Action Buttons */}
+                                <div className="flex items-center justify-between gap-3">
+                                  {/* Campaign Info */}
+                                  <div className="flex flex-col items-start space-y-1 flex-1 min-w-0">
+                                    <div className="font-medium text-sm truncate w-full">
+                                      {campaign.name}
+                                    </div>
+                                    <div className="text-xs text-muted-foreground font-mono truncate w-full">
+                                      {campaign.id}
+                                    </div>
                                   </div>
-                                  <div className="text-xs text-muted-foreground font-mono truncate w-full">
-                                    {campaign.id}
-                                  </div>
-                                </div>
 
-                                {/* Action Buttons */}
-                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  {/* Action Buttons */}
+                                  <div className="flex items-center gap-2 flex-shrink-0">
                                   {/* Workflow Status Indicator - only show loading or error */}
                                   {uploadStatus && uploadStatus.status !== "success" && (
                                     <div className="flex-shrink-0">
@@ -744,6 +745,27 @@ export default function URLReplacerPopup() {
                                   </Button>
                                 </div>
                               </div>
+
+                              {/* Bottom Row: Region Selection Buttons */}
+                              <div className="flex items-center gap-2 pt-2 border-t border-border/30">
+                                {(["PH", "US", "ID", "MY"] as const).map((region) => {
+                                  const isSelected = campaignRegions.get(campaign.id) === region;
+                                  return (
+                                    <Button
+                                      key={region}
+                                      onClick={() => handleRegionSelect(campaign.id, region)}
+                                      variant="outline"
+                                      size="sm"
+                                      className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${
+                                        isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
+                                      }`}
+                                    >
+                                      {region}
+                                    </Button>
+                                  );
+                                })}
+                              </div>
+                            </div>
                             </div>
                           );
                         })}
@@ -774,54 +796,77 @@ export default function URLReplacerPopup() {
                                 className={`w-full border-2 p-3 shadow-brutal-button rounded-none ${index === currentIndex ? "border-primary bg-primary/5" : "border-border"
                                   }`}
                               >
-                                <div className="flex items-center justify-between gap-3">
-                                  {/* Campaign Info */}
-                                  <div className="flex flex-col items-start space-y-1 flex-1 min-w-0">
-                                    <div className="font-medium text-sm truncate w-full">
-                                      {campaign.name}
+                                <div className="flex flex-col gap-2">
+                                  {/* Top Row: Campaign Info and Action Buttons */}
+                                  <div className="flex items-center justify-between gap-3">
+                                    {/* Campaign Info */}
+                                    <div className="flex flex-col items-start space-y-1 flex-1 min-w-0">
+                                      <div className="font-medium text-sm truncate w-full">
+                                        {campaign.name}
+                                      </div>
+                                      <div className="text-xs text-muted-foreground font-mono truncate w-full">
+                                        {campaign.id}
+                                      </div>
                                     </div>
-                                    <div className="text-xs text-muted-foreground font-mono truncate w-full">
-                                      {campaign.id}
+
+                                    {/* Action Buttons */}
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                      {/* Workflow Status Indicator */}
+                                      {uploadStatus && (
+                                        <div className="flex-shrink-0">
+                                          {uploadStatus.status === "started" && (
+                                            <Loader2 className="size-5 text-blue-500 animate-spin" />
+                                          )}
+                                          {uploadStatus.status === "error" && (
+                                            <XCircle className="size-5 text-red-500" />
+                                          )}
+                                        </div>
+                                      )}
+
+                                      {/* Cat Icon Button - Trigger download->upload workflow */}
+                                      <Button
+                                        onClick={(e) => triggerWorkflow(index, e)}
+                                        disabled={!baseUrl.trim() || isLoading}
+                                        variant="outline"
+                                        size="sm"
+                                        className="shadow-brutal-button rounded-none h-8 w-8 p-0"
+                                        title="Start download and upload workflow"
+                                      >
+                                        <Cat className="size-4" />
+                                      </Button>
+
+                                      {/* Google Drive Icon Button - Open Google Drive folder */}
+                                      <Button
+                                        onClick={(e) => navigateToGoogleDrive(index, e)}
+                                        disabled={isLoading}
+                                        variant="outline"
+                                        size="sm"
+                                        className="shadow-brutal-button rounded-none h-8 w-8 p-0"
+                                        title="Open Google Drive folder"
+                                      >
+                                        <FolderOpen className="size-4" />
+                                      </Button>
                                     </div>
                                   </div>
 
-                                  {/* Action Buttons */}
-                                  <div className="flex items-center gap-2 flex-shrink-0">
-                                    {/* Workflow Status Indicator */}
-                                    {uploadStatus && (
-                                      <div className="flex-shrink-0">
-                                        {uploadStatus.status === "started" && (
-                                          <Loader2 className="size-5 text-blue-500 animate-spin" />
-                                        )}
-                                        {uploadStatus.status === "error" && (
-                                          <XCircle className="size-5 text-red-500" />
-                                        )}
-                                      </div>
-                                    )}
-
-                                    {/* Cat Icon Button - Trigger download->upload workflow */}
-                                    <Button
-                                      onClick={(e) => triggerWorkflow(index, e)}
-                                      disabled={!baseUrl.trim() || isLoading}
-                                      variant="outline"
-                                      size="sm"
-                                      className="shadow-brutal-button rounded-none h-8 w-8 p-0"
-                                      title="Start download and upload workflow"
-                                    >
-                                      <Cat className="size-4" />
-                                    </Button>
-
-                                    {/* Google Drive Icon Button - Open Google Drive folder */}
-                                    <Button
-                                      onClick={(e) => navigateToGoogleDrive(index, e)}
-                                      disabled={isLoading}
-                                      variant="outline"
-                                      size="sm"
-                                      className="shadow-brutal-button rounded-none h-8 w-8 p-0"
-                                      title="Open Google Drive folder"
-                                    >
-                                      <FolderOpen className="size-4" />
-                                    </Button>
+                                  {/* Bottom Row: Region Selection Buttons */}
+                                  <div className="flex items-center gap-2 pt-2 border-t border-border/30">
+                                    {(["PH", "US", "ID", "MY"] as const).map((region) => {
+                                      const isSelected = campaignRegions.get(campaign.id) === region;
+                                      return (
+                                        <Button
+                                          key={region}
+                                          onClick={() => handleRegionSelect(campaign.id, region)}
+                                          variant="outline"
+                                          size="sm"
+                                          className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${
+                                            isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
+                                          }`}
+                                        >
+                                          {region}
+                                        </Button>
+                                      );
+                                    })}
                                   </div>
                                 </div>
                               </div>

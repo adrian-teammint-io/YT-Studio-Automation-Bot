@@ -18,8 +18,7 @@ let uploadInProgress = false;
 // Auto-navigation control - load from localStorage, default state is paused
 let isAutoNavigationPaused = true;
 
-// Countdown control - track if countdown is active and store interval ID
-let countdownIntervalId: number | null = null;
+
 
 /**
  * Attempt to find and click the export button
@@ -452,7 +451,7 @@ async function injectUploadStatusToast(): Promise<void> {
   styleTag.textContent = `
     .gmv-max-upload-status-toast {
       position: fixed;
-      bottom: 150px;
+      bottom: 130px;
       right: 32px;
       z-index: 10000;
       background: white;
@@ -556,7 +555,7 @@ async function updateControlButtons(): Promise<void> {
 }
 
 /**
- * Update navigation buttons state based on current configuration and countdown state
+ * Update navigation buttons state based on current configuration
  */
 async function updateNavigationButtons(): Promise<void> {
   const prevButton = document.getElementById("gmv-max-prev-campaign-btn") as HTMLButtonElement | null;
@@ -569,8 +568,8 @@ async function updateNavigationButtons(): Promise<void> {
     const baseUrl = result.gmv_max_base_url;
     const isConfigured = campaigns.length > 0 && baseUrl;
 
-    // Disable buttons if countdown is active or not configured
-    const shouldDisable = !isConfigured || countdownIntervalId !== null;
+    // Disable buttons if not configured
+    const shouldDisable = !isConfigured;
 
     // Update button states
     prevButton.disabled = shouldDisable;
@@ -581,7 +580,7 @@ async function updateNavigationButtons(): Promise<void> {
     nextButton.style.opacity = shouldDisable ? "0.5" : "1";
     nextButton.style.cursor = shouldDisable ? "not-allowed" : "pointer";
 
-    console.log("[GMV Max Navigator] Navigation buttons state updated:", { isConfigured, countdownActive: countdownIntervalId !== null });
+    console.log("[GMV Max Navigator] Navigation buttons state updated:", { isConfigured });
   }
 }
 
@@ -693,78 +692,24 @@ async function injectControlButtons(): Promise<void> {
   // Resume button click handler
   resumeButton.addEventListener("click", () => {
     if (resumeButton.disabled) return;
-    // If countdown is active, pause it
-    if (countdownIntervalId !== null) {
-      console.log("[GMV Max Navigator] Countdown paused by user");
-      clearInterval(countdownIntervalId);
-      countdownIntervalId = null;
 
-      // Persist workflow paused state to localStorage
-      chrome.storage.local.set({ [WORKFLOW_PAUSED_KEY]: true });
+    console.log("[GMV Max Navigator] Auto-navigation resumed, starting auto-click workflow");
+    isAutoNavigationPaused = false;
 
-      // Re-enable navigation buttons
-      updateNavigationButtons();
+    // Persist workflow resumed state to localStorage
+    chrome.storage.local.set({ [WORKFLOW_PAUSED_KEY]: false });
 
-      // Reset button to original state
-      resumeButton.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="5 3 19 12 5 21 5 3"></polygon>
-        </svg>
-        <span>재개</span>
-      `;
-      return;
-    }
+    // Reset the click flag to allow clicking again
+    hasClickedExportButton = false;
 
-    console.log("[GMV Max Navigator] Auto-navigation resumed, restarting in 5 seconds...");
+    // Start the auto-click attempts immediately
+    attemptAutoClick();
 
-    // Disable navigation buttons during countdown
+    // Update control buttons to show stop button
+    updateControlButtons();
+
+    // Enable navigation buttons
     updateNavigationButtons();
-
-    // Countdown from 5 to 1
-    let countdown = 5;
-
-    // Update button text immediately with countdown
-    resumeButton.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="5 3 19 12 5 21 5 3"></polygon>
-      </svg>
-      <span>재개 (${countdown}초)</span>
-    `;
-
-    countdownIntervalId = window.setInterval(() => {
-      countdown--;
-
-      if (countdown > 0) {
-        resumeButton.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="5 3 19 12 5 21 5 3"></polygon>
-          </svg>
-          <span>재개 (${countdown}초)</span>
-        `;
-      } else {
-        clearInterval(countdownIntervalId!);
-        countdownIntervalId = null;
-
-        // Start the workflow
-        console.log("[GMV Max Navigator] Restarting auto-click workflow");
-        isAutoNavigationPaused = false;
-
-        // Persist workflow resumed state to localStorage
-        chrome.storage.local.set({ [WORKFLOW_PAUSED_KEY]: false });
-
-        // Reset the click flag to allow clicking again
-        hasClickedExportButton = false;
-
-        // Restart the auto-click attempts
-        attemptAutoClick();
-
-        // Update control buttons to show stop button
-        updateControlButtons();
-
-        // Re-enable navigation buttons
-        updateNavigationButtons();
-      }
-    }, 1000);
   });
 
   // Inject buttons

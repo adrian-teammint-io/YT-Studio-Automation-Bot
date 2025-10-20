@@ -1,8 +1,18 @@
 # CLAUDE.md
 
 **When I request for any changes, focus on @extension/popup.tsx**
+**Before do anything, always check TODOs and ask user if TODOs should be completed first**
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code () when working with code in this repository.
+
+## TODOs
+
+- [ ] The "일시정지" button is automatically switched to "재개" button when the page reloads -> Persist in localStorage, doesn't change when page reloads.
+- [ ] Default value of region (US, PH, ID, MY) buttons in each campaign item is not set -> Default value should be extracted from region extraction function, and this is the uploading folder (on Google Drive).
+- [ ] No existing toast for notify the page is redirecting -> Create a toast notifying the page is redirecting "리디렉션 중..." with style "bottom: 150px".
+- [ ] The prev, next buttons is not handling properly (not following order) -> modify to make it follow the list's order.
+
+
 
 ## Project Overview
 
