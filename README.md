@@ -30,8 +30,8 @@ A modern todo application with drag-and-drop functionality, built as a Chrome ex
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/thanhhoan-v2/chrome-extension-todo-app.git
-cd chrome-extension-todo-app
+git clone https://github.com/thanhhoan-v2/chrome-gmv-max-automation.git
+cd chrome-gmv-max-automation
 ```
 
 2. Install dependencies:

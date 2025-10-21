@@ -451,7 +451,7 @@ async function injectUploadStatusToast(): Promise<void> {
   styleTag.textContent = `
     .gmv-max-upload-status-toast {
       position: fixed;
-      bottom: 130px;
+      bottom: 180px;
       right: 32px;
       z-index: 10000;
       background: white;
@@ -510,6 +510,179 @@ async function injectUploadStatusToast(): Promise<void> {
   document.head.appendChild(styleTag);
   document.body.appendChild(toast);
   console.log("[GMV Max Navigator] Upload status toast injected");
+}
+
+/**
+ * Inject a permanent progress toast showing uploaded/total campaigns
+ * Positioned between the upload status toast and the control buttons
+ */
+async function injectProgressToast(): Promise<void> {
+  if (document.getElementById("gmv-max-progress-toast")) {
+    return;
+  }
+
+  const toast = document.createElement("div");
+  toast.id = "gmv-max-progress-toast";
+  toast.className = "gmv-max-progress-toast";
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 130px; /* between upload toast (150px) and buttons (85px) */
+    right: 32px;
+    z-index: 10000;
+    background: white;
+    border: 2px solid black;
+    box-shadow: 0.2rem 0.2rem 0 0 black;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 700;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    width: 150px;
+    text-align: center;
+    position: fixed;
+  `;
+
+  // Create refetch button (hidden by default, shown on hover)
+  const refetchBtn = document.createElement("button");
+  refetchBtn.id = "gmv-max-refetch-btn";
+  refetchBtn.textContent = "Refetch";
+  refetchBtn.className = "gmv-max-refetch-btn";
+  refetchBtn.style.cssText = `
+    display: none;
+    margin-left: 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 700;
+    border: 2px solid black;
+    background: #f1f5f9;
+    cursor: pointer;
+    box-shadow: 0.15rem 0.15rem 0 0 black;
+  `;
+
+  // Show button on toast hover via events (robust in content scripts)
+  toast.addEventListener("mouseenter", () => {
+    refetchBtn.style.display = "inline-flex";
+  });
+  toast.addEventListener("mouseleave", () => {
+    refetchBtn.style.display = "none";
+  });
+
+  // Click handler to ask background to re-check Drive and update statuses
+  refetchBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const originalText = toast.textContent || "";
+    toast.textContent = "Refreshing...";
+    refetchBtn.disabled = true as any;
+    refetchBtn.style.cursor = "not-allowed";
+    try {
+      await new Promise<void>((resolve, reject) => {
+        chrome.runtime.sendMessage({ type: "REFETCH_UPLOAD_STATUSES" }, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (response?.success) {
+            resolve();
+          } else {
+            reject(new Error(response?.error || "Refetch failed"));
+          }
+        });
+      });
+    } catch (_) {
+      // Keep silent in content UI, rely on progress numbers updating when possible
+    } finally {
+      await updateProgressToast();
+      toast.textContent = originalText;
+      refetchBtn.disabled = false as any;
+      refetchBtn.style.cursor = "pointer";
+    }
+  });
+
+  // Compose toast content container so numbers and button align
+  const wrapper = document.createElement("div");
+  wrapper.style.display = "flex";
+  wrapper.style.alignItems = "center";
+  wrapper.style.justifyContent = "center";
+  wrapper.style.gap = "8px";
+
+  const countSpan = document.createElement("span");
+  countSpan.id = "gmv-max-progress-count";
+  wrapper.appendChild(countSpan);
+  wrapper.appendChild(refetchBtn);
+  toast.appendChild(wrapper);
+
+  document.body.appendChild(toast);
+  await updateProgressToast();
+  console.log("[GMV Max Navigator] Progress toast injected");
+}
+
+/**
+ * Compute and render uploaded/total campaigns in the progress toast
+ */
+async function updateProgressToast(): Promise<void> {
+  const toast = document.getElementById("gmv-max-progress-toast");
+  if (!toast) return;
+
+  try {
+    const result = await chrome.storage.local.get([
+      "gmv_max_campaign_data",
+      "gmv_max_upload_success_status",
+    ]);
+
+    const campaigns: Array<{ name: string; id: string }> = result.gmv_max_campaign_data || [];
+    const successStatuses: Record<string, { status: string }> = result.gmv_max_upload_success_status || {};
+
+    const total = campaigns.length;
+    const uploaded = total === 0 ? 0 : campaigns.filter((c) => successStatuses[c.name]?.status === "success").length;
+
+    if (total > 0) {
+      const countSpan = document.getElementById("gmv-max-progress-count");
+      if (countSpan) {
+        countSpan.textContent = `${uploaded}/${total}`;
+      } else {
+        toast.textContent = `${uploaded}/${total}`;
+      }
+      toast.style.display = "flex";
+    } else {
+      toast.style.display = "none";
+    }
+  } catch (e) {
+    // On error, hide to avoid stale display
+    toast.style.display = "none";
+  }
+}
+
+/**
+ * Check campaigns and pause workflow if none pending
+ */
+async function checkAndPauseIfNoPendingCampaigns(): Promise<void> {
+  try {
+    const result = await chrome.storage.local.get([
+      "gmv_max_campaign_data",
+      "gmv_max_upload_success_status",
+    ]);
+
+    const campaigns: Array<{ name: string; id: string }> = result.gmv_max_campaign_data || [];
+    const successStatuses: Record<string, { status: string }> = result.gmv_max_upload_success_status || {};
+
+    const total = campaigns.length;
+    const uploaded = total === 0 ? 0 : campaigns.filter((c) => successStatuses[c.name]?.status === "success").length;
+    const hasPending = total > 0 && uploaded < total;
+
+    if (!hasPending) {
+      // No campaigns or all completed -> pause
+      isAutoNavigationPaused = true;
+      chrome.storage.local.set({ [WORKFLOW_PAUSED_KEY]: true });
+      updateControlButtons();
+      updateUploadStatusToast("idle");
+      console.log("[GMV Max Navigator] No pending campaigns. Workflow paused.");
+    }
+  } catch (e) {
+    // Ignore errors, do not force resume
+  }
 }
 
 /**
@@ -900,9 +1073,19 @@ chrome.runtime.onMessage.addListener((message) => {
         switch (message.status) {
           case "started":
             updateUploadStatusToast("uploading", "업로드 중...");
+            updateProgressToast();
             break;
           case "success":
             updateUploadStatusToast("success", "업로드 완료");
+
+            // Persist success to chrome.storage so progress stays accurate even if popup is closed
+            chrome.storage.local.get(["gmv_max_upload_success_status"], (result) => {
+              const successStatuses = result.gmv_max_upload_success_status || {};
+              successStatuses[message.campaignName] = { status: "success" } as any;
+              chrome.storage.local.set({ gmv_max_upload_success_status: successStatuses }, () => {
+                updateProgressToast();
+              });
+            });
 
             // Auto-click "Next Campaign" button after successful upload (only if not paused)
             if (!isAutoNavigationPaused) {
@@ -927,6 +1110,7 @@ chrome.runtime.onMessage.addListener((message) => {
             break;
           case "error":
             updateUploadStatusToast("error", `업로드 실패: ${message.error || "알 수 없는 오류"}`);
+            updateProgressToast();
             break;
         }
       }
@@ -947,6 +1131,13 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       updateNavigationButtons();
       updateControlButtons();
     }
+
+    // Update progress when relevant storage keys change
+    if (changes["gmv_max_campaign_data"] || changes["gmv_max_upload_success_status"]) {
+      updateProgressToast();
+      // Auto-pause when everything is completed or no campaigns exist
+      checkAndPauseIfNoPendingCampaigns();
+    }
   }
 });
 
@@ -965,10 +1156,25 @@ async function initialize() {
 
     console.log("[GMV Max Navigator] Initializing on GMV Max dashboard");
 
+    // Restore paused/resumed state from storage (default to paused)
+    try {
+      const storedState = await chrome.storage.local.get([WORKFLOW_PAUSED_KEY]);
+      // If explicitly set to false, it means resumed; otherwise treat as paused by default
+      isAutoNavigationPaused = storedState[WORKFLOW_PAUSED_KEY] !== false;
+      console.log("[GMV Max Navigator] Restored paused state:", isAutoNavigationPaused);
+    } catch (e) {
+      console.warn("[GMV Max Navigator] Failed to restore paused state, defaulting to paused");
+      isAutoNavigationPaused = true;
+    }
+
     // Inject UI elements (always visible, disabled if not configured)
     await injectNavigationButtons();
     await injectUploadStatusToast();
+    await injectProgressToast();
     await injectControlButtons();
+
+    // Ensure paused when there are no campaigns to upload
+    await checkAndPauseIfNoPendingCampaigns();
 
     // Check if auto-click is enabled
     const result = await chrome.storage.local.get([STORAGE_KEY]);

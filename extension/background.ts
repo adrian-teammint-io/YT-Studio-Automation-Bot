@@ -1,6 +1,6 @@
 // Background service worker for Chrome extension
 
-import { uploadToGoogleDrive, type GoogleDriveConfig } from "./services/google-drive";
+import { uploadToGoogleDrive, type GoogleDriveConfig, getAuthToken } from "./services/google-drive";
 import { detectRegionFromCampaign } from "./utils/region-detector";
 
 interface Todo {
@@ -255,6 +255,62 @@ async function checkAndUploadDownload(campaignName: string): Promise<void> {
 
 // Listen for messages from content scripts and popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "REFETCH_UPLOAD_STATUSES") {
+    (async () => {
+      try {
+        // Load campaigns and current statuses
+        const stored = await chrome.storage.local.get([
+          "gmv_max_campaign_data",
+          "gmv_max_upload_success_status",
+        ]);
+
+        const campaigns: Array<{ name: string; id: string }> = stored.gmv_max_campaign_data || [];
+        const currentStatuses: Record<string, { status: string }> = stored.gmv_max_upload_success_status || {};
+
+        if (campaigns.length === 0) {
+          sendResponse({ success: true });
+          return;
+        }
+
+        // Auth once
+        const token = await getAuthToken();
+
+        // For each campaign, check if a file exists in its region folder
+        const updatedStatuses: Record<string, { status: string }> = { ...currentStatuses };
+
+        for (const campaign of campaigns) {
+          const regionInfo = detectRegionFromCampaign(campaign.name);
+          if (!regionInfo) {
+            continue;
+          }
+
+          try {
+            const searchQuery = encodeURIComponent(
+              `name contains '${campaign.name}' and '${regionInfo.folderId}' in parents and trashed=false`
+            );
+            const resp = await fetch(
+              `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (resp.ok) {
+              const data = await resp.json();
+              if (Array.isArray(data.files) && data.files.length > 0) {
+                updatedStatuses[campaign.name] = { status: "success" } as any;
+              }
+            }
+          } catch (_) {
+            // Ignore per-campaign errors to allow others to proceed
+          }
+        }
+
+        await chrome.storage.local.set({ gmv_max_upload_success_status: updatedStatuses });
+        sendResponse({ success: true });
+      } catch (error) {
+        sendResponse({ success: false, error: (error as Error).message });
+      }
+    })();
+    return true;
+  }
   if (message.type === "CHECK_AND_UPLOAD_DOWNLOAD") {
     // Handle download check and upload request from content script
     console.log("[Background] Received CHECK_AND_UPLOAD_DOWNLOAD request");

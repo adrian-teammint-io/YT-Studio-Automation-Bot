@@ -93,6 +93,49 @@ export default function URLReplacerPopup() {
           const data = JSON.parse(storedCampaignData);
           setCampaigns(data);
           setCampaignDataText(data.map((c: Campaign) => `${c.name}    ${c.id}`).join("\n"));
+
+          // Auto-populate region defaults from campaign names
+          const storedRegions = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_REGIONS);
+          const existingRegions = storedRegions ? JSON.parse(storedRegions) : {};
+          let hasNewRegions = false;
+
+          data.forEach((campaign: Campaign) => {
+            // Only set default if not already set by user
+            if (!existingRegions[campaign.id]) {
+              const regionInfo = detectRegionFromCampaign(campaign.name);
+              if (regionInfo) {
+                // Map detected region to button region format
+                const regionMap: Record<string, "PH" | "US" | "ID" | "MY"> = {
+                  "TEST_PH": "PH",
+                  "TEST_US": "US",
+                  "TEST_ID": "ID",
+                  "TEST_MY": "MY",
+                  "WEST_US": "US",
+                  "EAST_PH": "PH",
+                  "EAST_MY": "MY",
+                  "EAST_ID": "ID"
+                };
+
+                const buttonRegion = regionMap[regionInfo.region];
+                if (buttonRegion) {
+                  existingRegions[campaign.id] = buttonRegion;
+                  hasNewRegions = true;
+                }
+              }
+            }
+          });
+
+          // Save updated regions if we added new defaults
+          if (hasNewRegions) {
+            localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(existingRegions));
+          }
+
+          // Set state with all regions (existing + new defaults)
+          const regionsMap = new Map<string, "PH" | "US" | "ID" | "MY">();
+          Object.entries(existingRegions).forEach(([campaignId, region]) => {
+            regionsMap.set(campaignId, region as "PH" | "US" | "ID" | "MY");
+          });
+          setCampaignRegions(regionsMap);
         }
 
         if (storedBaseUrl) {
@@ -113,31 +156,30 @@ export default function URLReplacerPopup() {
           setAutoClickEnabled(storedAutoClick === "true");
         }
 
-        // Load persisted upload success statuses
+        // Load persisted upload success statuses from both localStorage and chrome.storage.local, merge them
         const storedUploadSuccessStatus = localStorage.getItem(STORAGE_KEYS.UPLOAD_SUCCESS_STATUS);
+        const statusMap = new Map<string, UploadStatus>();
         if (storedUploadSuccessStatus) {
           const successStatuses = JSON.parse(storedUploadSuccessStatus);
-          const statusMap = new Map<string, UploadStatus>();
-
-          // Convert stored object to Map
           Object.entries(successStatuses).forEach(([campaignName, status]) => {
             statusMap.set(campaignName, status as UploadStatus);
           });
-
-          setUploadStatuses(statusMap);
         }
-
-        // Load persisted region selections
-        const storedRegions = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_REGIONS);
-        if (storedRegions) {
-          const regions = JSON.parse(storedRegions);
-          const regionsMap = new Map<string, "PH" | "US" | "ID" | "MY">();
-
-          Object.entries(regions).forEach(([campaignId, region]) => {
-            regionsMap.set(campaignId, region as "PH" | "US" | "ID" | "MY");
+        // Merge with chrome storage copy (authoritative if present)
+        if (typeof chrome !== "undefined" && chrome.storage) {
+          chrome.storage.local.get([STORAGE_KEYS.UPLOAD_SUCCESS_STATUS], (result) => {
+            const chromeSuccessStatuses = result[STORAGE_KEYS.UPLOAD_SUCCESS_STATUS] || {};
+            Object.entries(chromeSuccessStatuses).forEach(([campaignName, status]) => {
+              statusMap.set(campaignName, status as UploadStatus);
+            });
+            if (statusMap.size > 0) {
+              setUploadStatuses(statusMap);
+            }
           });
-
-          setCampaignRegions(regionsMap);
+        } else {
+          if (statusMap.size > 0) {
+            setUploadStatuses(statusMap);
+          }
         }
       } catch (error) {
         console.error("Failed to load stored data:", error);
@@ -167,6 +209,10 @@ export default function URLReplacerPopup() {
               // Store the success status permanently
               successStatuses[statusMessage.campaignName] = statusMessage;
               localStorage.setItem(STORAGE_KEYS.UPLOAD_SUCCESS_STATUS, JSON.stringify(successStatuses));
+              // Also persist to chrome.storage.local so content scripts and future sessions stay in sync
+              if (typeof chrome !== "undefined" && chrome.storage) {
+                chrome.storage.local.set({ [STORAGE_KEYS.UPLOAD_SUCCESS_STATUS]: successStatuses });
+              }
             }
 
             return newMap;
@@ -295,6 +341,49 @@ export default function URLReplacerPopup() {
       setCurrentIndex(0);
       localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, "0");
       chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: "0" });
+
+      // Auto-populate region defaults for new campaigns
+      const storedRegions = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_REGIONS);
+      const existingRegions = storedRegions ? JSON.parse(storedRegions) : {};
+      let hasNewRegions = false;
+
+      parsedCampaigns.forEach((campaign) => {
+        // Only set default if not already set by user
+        if (!existingRegions[campaign.id]) {
+          const regionInfo = detectRegionFromCampaign(campaign.name);
+          if (regionInfo) {
+            // Map detected region to button region format
+            const regionMap: Record<string, "PH" | "US" | "ID" | "MY"> = {
+              "TEST_PH": "PH",
+              "TEST_US": "US",
+              "TEST_ID": "ID",
+              "TEST_MY": "MY",
+              "WEST_US": "US",
+              "EAST_PH": "PH",
+              "EAST_MY": "MY",
+              "EAST_ID": "ID"
+            };
+
+            const buttonRegion = regionMap[regionInfo.region];
+            if (buttonRegion) {
+              existingRegions[campaign.id] = buttonRegion;
+              hasNewRegions = true;
+            }
+          }
+        }
+      });
+
+      // Save updated regions if we added new defaults
+      if (hasNewRegions) {
+        localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(existingRegions));
+      }
+
+      // Update state with all regions (existing + new defaults)
+      const regionsMap = new Map<string, "PH" | "US" | "ID" | "MY">();
+      Object.entries(existingRegions).forEach(([campaignId, region]) => {
+        regionsMap.set(campaignId, region as "PH" | "US" | "ID" | "MY");
+      });
+      setCampaignRegions(regionsMap);
 
       // Update last saved state for UI indicator
       setLastSavedCampaignData(campaignDataText);
@@ -644,9 +733,14 @@ export default function URLReplacerPopup() {
                   <Badge>team-mint.io</Badge>
                   <Badge variant="secondary">Global Team</Badge>
                 </div>
-                <div className="text-xs text-muted-foreground font-mono">
+                <div className="text-xs text-muted-foreground font-mono flex items-center gap-2">
                   {/* Total {campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''} available */}
-                  총 {campaigns.length}개의 캠페인이 가능합니다
+                  <span>총 {campaigns.length}개의 캠페인이 가능합니다</span>
+                  {campaigns.length > 0 && (
+                    <span className="px-1.5 py-0.5 border rounded-sm">
+                      {campaigns.filter(c => uploadStatuses.get(c.name)?.status === "success").length}/{campaigns.length}
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2">

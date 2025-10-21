@@ -5,13 +5,13 @@ This file provides guidance to Claude Code () when working with code in this rep
 
 ## TODOs
 
-- [ ] The "일시정지" button is automatically switched to "재개" button when the page reloads -> Persist in localStorage, doesn't change when page reloads.
-- [ ] Default value of region (US, PH, ID, MY) buttons in each campaign item is not set -> Default value should be extracted from region extraction function, and this is the uploading folder (on Google Drive).
+- [x] The "일시정지" button is automatically switched to "재개" button when the page reloads -> Persist in localStorage, doesn't change when page reloads.
+- [x] Show the remaining number of campaigns not uploaded.
+- [x] Default value of region (US, PH, ID, MY) buttons in each campaign item is not set -> Default value should be extracted from region extraction function, and this is the uploading folder (on Google Drive).
 - [ ] No existing toast for notify the page is redirecting -> Create a toast notifying the page is redirecting "리디렉션 중..." with style "bottom: 150px".
 - [ ] The prev, next buttons is not handling properly (not following order) -> modify to make it follow the list's order.
 - [ ] Add a button to check each campaign item's report file is uploaded.
-- [ ] Show the remaining number of campaigns not uploaded.
-- [ ] If there's no campaign to be uploaded, or all the campaigns are completed -> Show a toast to notify user that all campaigns has uploaded.
+- [ ] If there's no campaign to be uploaded, or all the campaigns are completed -> Pause the process.
 - [ ] When user clicks on "재개" button (or start the automation flow) -> navigates to the first item of the campaign list.
 - [ ] When navigates to a campaign, check if the campaign is uploaded (in localStorage). If not, then continue with the flow, else then continue with the next one.
 
