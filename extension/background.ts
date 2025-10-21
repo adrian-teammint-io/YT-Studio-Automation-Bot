@@ -1,7 +1,7 @@
 // Background service worker for Chrome extension
 
 import { uploadToGoogleDrive, type GoogleDriveConfig, getAuthToken } from "./services/google-drive";
-import { detectRegionFromCampaign } from "./utils/region-detector";
+import { detectRegionFromCampaign, validateSharedDriveFolders } from "./utils/region-detector";
 
 interface Todo {
   id: string;
@@ -132,8 +132,82 @@ function broadcastUploadStatus(message: UploadStatusMessage): void {
 /**
  * Check recent downloads and trigger upload
  */
-async function checkAndUploadDownload(campaignName: string): Promise<void> {
+async function checkAndUploadDownload(campaignName: string, campaignId: string): Promise<void> {
   console.log("[Background] Checking recent downloads for campaign:", campaignName);
+
+  // STEP 0: Check if file already exists in Google Drive before downloading
+  try {
+    console.log("[Background] STEP 0: Checking if file already exists in Google Drive...");
+    
+    // Detect region to get the correct folder
+    const regionInfo = detectRegionFromCampaign(campaignName);
+    if (!regionInfo) {
+      throw new Error(`Could not detect region from campaign name: ${campaignName}`);
+    }
+    
+    // Get auth token
+    const token = await getAuthToken();
+    
+    // First find the campaign folder
+    const searchQuery = encodeURIComponent(
+      `name='${campaignName}' and '${regionInfo.folderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
+    );
+    const folderResponse = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    
+    if (folderResponse.ok) {
+      const folderData = await folderResponse.json();
+      
+      if (folderData.files && folderData.files.length > 0) {
+        const campaignFolderId = folderData.files[0].id;
+        console.log("[Background] Campaign folder exists:", campaignFolderId);
+        
+        // Now check if a file with the campaign ID in its name exists
+        const fileSearchQuery = encodeURIComponent(
+          `'${campaignFolderId}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false`
+        );
+        const fileResponse = await fetch(
+          `https://www.googleapis.com/drive/v3/files?q=${fileSearchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        
+        if (fileResponse.ok) {
+          const fileData = await fileResponse.json();
+          const existingFile = fileData.files?.find((file: any) => file.name.includes(campaignId));
+          
+          if (existingFile) {
+            console.log("[Background] ✅ File already exists in Google Drive:", existingFile.name);
+            console.log("[Background] Skipping download and upload - marking as success");
+            
+            // Broadcast success status immediately
+            broadcastUploadStatus({
+              type: "UPLOAD_STATUS",
+              status: "success",
+              campaignName,
+              fileName: existingFile.name,
+            });
+            
+            return; // Exit early - no need to download or upload
+          }
+        }
+      }
+    }
+    
+    console.log("[Background] File does not exist in Google Drive - proceeding with download");
+  } catch (error) {
+    console.warn("[Background] Error checking file existence, proceeding with download:", error);
+    // Continue with download even if check fails
+  }
 
   // Wait a bit for the download to complete
   await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -285,17 +359,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
 
           try {
-            const searchQuery = encodeURIComponent(
-              `name contains '${campaign.name}' and '${regionInfo.folderId}' in parents and trashed=false`
+            // Step 1: Search for the campaign folder inside the region parent folder
+            const folderSearchQuery = encodeURIComponent(
+              `name='${campaign.name}' and '${regionInfo.folderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
             );
-            const resp = await fetch(
-              `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc`,
+            const folderResp = await fetch(
+              `https://www.googleapis.com/drive/v3/files?q=${folderSearchQuery}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
               { headers: { Authorization: `Bearer ${token}` } }
             );
-            if (resp.ok) {
-              const data = await resp.json();
-              if (Array.isArray(data.files) && data.files.length > 0) {
+
+            if (!folderResp.ok) {
+              // If folder search fails, do not mark as success
+              continue;
+            }
+
+            const folderData = await folderResp.json();
+            if (!Array.isArray(folderData.files) || folderData.files.length === 0) {
+              // No folder found for this campaign - do not mark as success
+              // Remove from statuses if it was previously marked as success
+              if (updatedStatuses[campaign.name]?.status === "success") {
+                delete updatedStatuses[campaign.name];
+              }
+              continue;
+            }
+
+            // Step 2: Check if the campaign folder contains a file with the campaign ID in its name
+            const campaignFolderId = folderData.files[0].id;
+            const fileSearchQuery = encodeURIComponent(
+              `'${campaignFolderId}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false`
+            );
+            const fileResp = await fetch(
+              `https://www.googleapis.com/drive/v3/files?q=${fileSearchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            if (fileResp.ok) {
+              const fileData = await fileResp.json();
+              // Check if any file contains the campaign ID in its filename
+              const hasMatchingFile = Array.isArray(fileData.files) &&
+                fileData.files.some((file: any) => file.name.includes(campaign.id));
+
+              if (hasMatchingFile) {
+                // Found .xlsx file with campaign ID in filename - mark as success
                 updatedStatuses[campaign.name] = { status: "success" } as any;
+              } else {
+                // Folder exists but no file with campaign ID - remove success status if previously set
+                if (updatedStatuses[campaign.name]?.status === "success") {
+                  delete updatedStatuses[campaign.name];
+                }
+              }
+            } else {
+              // File search failed - remove success status if previously set
+              if (updatedStatuses[campaign.name]?.status === "success") {
+                delete updatedStatuses[campaign.name];
               }
             }
           } catch (_) {
@@ -314,7 +430,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "CHECK_AND_UPLOAD_DOWNLOAD") {
     // Handle download check and upload request from content script
     console.log("[Background] Received CHECK_AND_UPLOAD_DOWNLOAD request");
-    checkAndUploadDownload(message.campaignName)
+    checkAndUploadDownload(message.campaignName, message.campaignId)
       .then(() => {
         sendResponse({ success: true });
       })
@@ -348,6 +464,56 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 // Update badge on extension install/startup
 chrome.runtime.onInstalled.addListener(() => {
   updateBadge();
+  
+  // 🔧 DEVELOPMENT ONLY: Validate Shared Drive configuration
+  // ✅ ENABLED - Verify folder IDs are in Shared Drives
+  // ⚠️ REMEMBER TO COMMENT OUT before production deployment
+  (async () => {
+    try {
+      const token = await getAuthToken();
+      const validation = await validateSharedDriveFolders(token);
+      
+      console.log("========================================");
+      console.log("📁 SHARED DRIVE VALIDATION RESULTS");
+      console.log("========================================");
+      
+      validation.results.forEach(({ region, folderId, accessible, isSharedDrive, folderName, error }) => {
+        const status = (accessible && isSharedDrive) ? "✅" : "❌";
+        console.log(`${status} ${region}`);
+        console.log(`   Folder ID: ${folderId}`);
+        if (folderName) console.log(`   Folder Name: ${folderName}`);
+        console.log(`   Accessible: ${accessible}`);
+        console.log(`   Shared Drive: ${isSharedDrive}`);
+        if (error) console.log(`   Error: ${error}`);
+        console.log("");
+      });
+      
+      console.log("========================================");
+      console.log(`Overall Status: ${validation.valid ? "✅ ALL VALID" : "❌ SOME FOLDERS ARE INVALID"}`);
+      console.log("========================================");
+      
+      if (!validation.valid) {
+        console.error("");
+        console.error("========================================");
+        console.error("⚠️ ACTION REQUIRED: Fix Folder Access");
+        console.error("========================================");
+        console.error("");
+        console.error("🔧 SOLUTION:");
+        console.error("1. Go to Google Drive → Shared drives");
+        console.error("2. Find 'GMV_Max_Automation_TEST' Shared Drive");
+        console.error("3. Right-click the Shared Drive → 'Manage members'");
+        console.error("4. Click 'Add members'");
+        console.error("5. Add this service account email:");
+        console.error("   gmv-max-automation-service-acc@gmv-max-campaign-navigator.iam.gserviceaccount.com");
+        console.error("6. Set role to 'Content manager' or 'Manager'");
+        console.error("7. Click 'Send'");
+        console.error("");
+        console.error("========================================");
+      }
+    } catch (error) {
+      console.error("Failed to validate folders:", error);
+    }
+  })();
 });
 
 chrome.runtime.onStartup.addListener(() => {

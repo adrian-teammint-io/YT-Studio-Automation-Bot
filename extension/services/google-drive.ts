@@ -36,7 +36,8 @@ export async function getAuthToken(): Promise<string> {
     console.log("[Google Drive] Service account email:", SERVICE_ACCOUNT.client_email);
 
     // Create JWT assertion
-    const scope = "https://www.googleapis.com/auth/drive.file";
+    // Use drive scope instead of drive.file to access existing folders
+    const scope = "https://www.googleapis.com/auth/drive";
     const jwtAssertion = await createJWTAssertion(
       SERVICE_ACCOUNT.client_email,
       SERVICE_ACCOUNT.private_key,
@@ -57,20 +58,108 @@ export async function getAuthToken(): Promise<string> {
 }
 
 /**
+ * Check if service account can access a folder
+ * Returns detailed error information for diagnostics
+ */
+export async function checkFolderAccess(
+  token: string,
+  folderId: string
+): Promise<{ accessible: boolean; error?: string; details?: any }> {
+  try {
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${folderId}?fields=id,name,driveId,capabilities,permissions&supportsAllDrives=true`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorJson;
+      try {
+        errorJson = JSON.parse(errorText);
+      } catch {
+        errorJson = { message: errorText };
+      }
+
+      return {
+        accessible: false,
+        error: `HTTP ${response.status}: ${errorJson.error?.message || errorText}`,
+        details: errorJson,
+      };
+    }
+
+    const data = await response.json();
+    return {
+      accessible: true,
+      details: {
+        id: data.id,
+        name: data.name,
+        driveId: data.driveId,
+        isSharedDrive: !!data.driveId,
+        capabilities: data.capabilities,
+      },
+    };
+  } catch (error) {
+    return {
+      accessible: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+/**
+ * Get the Shared Drive ID for a folder (if it belongs to a Shared Drive)
+ * Returns null if the folder is not in a Shared Drive
+ */
+async function getSharedDriveId(
+  token: string,
+  folderId: string
+): Promise<string | null> {
+  try {
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${folderId}?fields=driveId&supportsAllDrives=true`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.warn(`[Google Drive] Failed to get driveId for folder ${folderId}`);
+      return null;
+    }
+
+    const data = await response.json();
+    return data.driveId || null;
+  } catch (error) {
+    console.error(`[Google Drive] Error getting driveId:`, error);
+    return null;
+  }
+}
+
+/**
  * Search for a folder by name within a parent folder
  * Supports Shared Drives (required for service account uploads)
  */
 async function findFolder(
   token: string,
   folderName: string,
-  parentFolderId: string
+  parentFolderId: string,
+  driveId?: string | null
 ): Promise<string | null> {
   const query = encodeURIComponent(
     `name='${folderName}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
   );
 
+  // Add driveId parameter if we're working within a Shared Drive
+  const driveParam = driveId ? `&driveId=${driveId}&corpora=drive` : '';
+
   const response = await fetch(
-    `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+    `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true${driveParam}`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -121,14 +210,24 @@ async function createFolder(
 
 /**
  * Get or create a folder (finds existing or creates new)
+ * Handles Shared Drive context automatically
  */
 async function getOrCreateFolder(
   token: string,
   folderName: string,
   parentFolderId: string
 ): Promise<string> {
-  // Try to find existing folder first
-  const existingFolderId = await findFolder(token, folderName, parentFolderId);
+  // Get the Shared Drive ID from the parent folder (if it's in a Shared Drive)
+  const driveId = await getSharedDriveId(token, parentFolderId);
+
+  if (driveId) {
+    console.log(`[Google Drive] Parent folder is in Shared Drive: ${driveId}`);
+  } else {
+    console.log(`[Google Drive] Parent folder is NOT in a Shared Drive (regular My Drive)`);
+  }
+
+  // Try to find existing folder first (pass driveId to scope the search)
+  const existingFolderId = await findFolder(token, folderName, parentFolderId, driveId);
 
   if (existingFolderId) {
     console.log(`[Google Drive] Found existing folder: ${folderName}`);
@@ -143,11 +242,64 @@ async function getOrCreateFolder(
 /**
  * Upload a file to Google Drive
  */
+/**
+ * Check if a file already exists in Google Drive folder
+ * Returns the file if it exists, null otherwise
+ */
+async function checkFileExists(
+  token: string,
+  fileName: string,
+  folderId: string,
+  driveId?: string | null
+): Promise<{ id: string; name: string } | null> {
+  try {
+    console.log(`[Google Drive] Checking if file exists: ${fileName} in folder ${folderId}`);
+
+    const searchQuery = encodeURIComponent(
+      `name='${fileName}' and '${folderId}' in parents and trashed=false`
+    );
+
+    // Add driveId parameter if we're working within a Shared Drive
+    const driveParam = driveId ? `&driveId=${driveId}&corpora=drive` : '';
+
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc${driveParam}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.warn(`[Google Drive] Failed to check file existence: ${response.statusText}`);
+      return null;
+    }
+
+    const data = await response.json();
+
+    if (data.files && data.files.length > 0) {
+      console.log(`[Google Drive] ✅ File already exists: ${fileName}`);
+      return {
+        id: data.files[0].id,
+        name: data.files[0].name,
+      };
+    }
+
+    console.log(`[Google Drive] File does not exist: ${fileName}`);
+    return null;
+  } catch (error) {
+    console.error(`[Google Drive] Error checking file existence:`, error);
+    return null;
+  }
+}
+
 async function uploadFile(
   token: string,
   fileName: string,
   fileBlob: Blob,
-  folderId: string
+  folderId: string,
+  driveId?: string | null
 ): Promise<{ id: string; name: string }> {
   // Step 1: Create metadata
   const metadata = {
@@ -215,16 +367,18 @@ async function uploadFile(
     console.log("[Google Drive] ✅ Ignoring storageQuotaExceeded error - treating as success");
     console.log("[Google Drive] This is a known Google Drive API bug with service accounts");
 
-    // Wait a moment for Drive to index the file, then verify
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Wait longer for Drive to index the file (increased from 1.5s to 3s)
+    console.log("[Google Drive] Waiting 3 seconds for Drive to index the file...");
+    await new Promise((resolve) => setTimeout(resolve, 3000));
 
     try {
       // Search for the file we just uploaded
       const searchQuery = encodeURIComponent(
         `name='${fileName}' and '${folderId}' in parents and trashed=false`
       );
+      const driveParam = driveId ? `&driveId=${driveId}&corpora=drive` : '';
       const searchResponse = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc`,
+        `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc${driveParam}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -249,9 +403,42 @@ async function uploadFile(
       console.error("[Google Drive] Verification failed:", verifyError);
     }
 
+    // Verification failed - try one more time with a longer wait
+    console.log("[Google Drive] First verification failed, retrying after 2 more seconds...");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    try {
+      const searchQuery = encodeURIComponent(
+        `name='${fileName}' and '${folderId}' in parents and trashed=false`
+      );
+      const driveParam = driveId ? `&driveId=${driveId}&corpora=drive` : '';
+      const retryResponse = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc${driveParam}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (retryResponse.ok) {
+        const retryData = await retryResponse.json();
+        if (retryData.files && retryData.files.length > 0) {
+          console.log("[Google Drive] ✅ File verified on retry - upload succeeded!");
+          return {
+            id: retryData.files[0].id,
+            name: retryData.files[0].name,
+          };
+        }
+      }
+    } catch (retryError) {
+      console.error("[Google Drive] Retry verification also failed:", retryError);
+    }
+
     // Even if verification failed, return success with a placeholder
     // because we know this error means the upload worked
-    console.log("[Google Drive] ⚠️ Could not verify file, but treating as success due to known API bug");
+    console.log("[Google Drive] ⚠️ Could not verify file after retries, but treating as success due to known API bug");
+    console.log("[Google Drive] ⚠️ RECOMMENDATION: Manually check Google Drive to confirm file upload");
     return {
       id: "upload-succeeded",
       name: fileName,
@@ -288,22 +475,105 @@ export async function uploadToGoogleDrive(config: GoogleDriveConfig): Promise<Up
     const token = await getAuthToken();
     console.log("[Google Drive] Authentication successful");
 
+    // 🔍 DIAGNOSTIC: Check if service account can access the parent folder
+    console.log("[Google Drive] ========================================");
+    console.log("[Google Drive] DIAGNOSTIC: Checking folder access...");
+    const accessCheck = await checkFolderAccess(token, config.parentFolderId);
+
+    if (!accessCheck.accessible) {
+      console.error("[Google Drive] ❌ FOLDER ACCESS DENIED");
+      console.error("[Google Drive] Folder ID:", config.parentFolderId);
+      console.error("[Google Drive] Error:", accessCheck.error);
+      console.error("[Google Drive] Details:", accessCheck.details);
+      console.error("");
+      console.error("[Google Drive] 🔧 SOLUTION:");
+      console.error("[Google Drive] 1. Go to Google Drive → Shared drives");
+      console.error("[Google Drive] 2. Find 'GMV_Max_Automation_TEST' Shared Drive");
+      console.error("[Google Drive] 3. Right-click → Manage members");
+      console.error("[Google Drive] 4. Add service account email with 'Content manager' role");
+      console.error("[Google Drive] 5. Service account email:", SERVICE_ACCOUNT.client_email);
+      console.error("");
+
+      throw new Error(
+        `Service account cannot access folder ${config.parentFolderId}. ` +
+        `Please grant access to the Shared Drive. Details: ${accessCheck.error}`
+      );
+    }
+
+    console.log("[Google Drive] ✅ Folder access verified");
+    console.log("[Google Drive] - Folder name:", accessCheck.details?.name);
+    console.log("[Google Drive] - Is Shared Drive:", accessCheck.details?.isSharedDrive);
+    console.log("[Google Drive] - Drive ID:", accessCheck.details?.driveId || "N/A (My Drive)");
+    console.log("[Google Drive] ========================================");
+
+    // Extract the driveId for use in subsequent operations
+    const driveId = accessCheck.details?.driveId || null;
+
     // Get or create campaign folder
+    console.log("[Google Drive] STEP 1/2: Creating/finding campaign folder");
+    console.log("[Google Drive] - Region parent:", config.parentFolderId);
+    console.log("[Google Drive] - Campaign name:", config.campaignFolderName);
+    console.log("[Google Drive] - Shared Drive ID:", driveId || "N/A (My Drive)");
+
     const campaignFolderId = await getOrCreateFolder(
       token,
       config.campaignFolderName,
       config.parentFolderId
     );
-    console.log("[Google Drive] Campaign folder ready:", campaignFolderId);
+
+    console.log("[Google Drive] ✅ STEP 1/2 COMPLETE");
+    console.log("[Google Drive] - Campaign folder ID:", campaignFolderId);
+    console.log("[Google Drive] ========================================");
+
+    // Check if file already exists before uploading
+    console.log("[Google Drive] STEP 2/2: Checking if file already exists...");
+    console.log("[Google Drive] - File name:", config.fileName);
+    console.log("[Google Drive] - Target folder:", campaignFolderId);
+
+    const existingFile = await checkFileExists(
+      token,
+      config.fileName,
+      campaignFolderId,
+      driveId
+    );
+
+    if (existingFile) {
+      console.log("[Google Drive] ✅ File already exists - skipping upload");
+      console.log("[Google Drive] - Existing file ID:", existingFile.id);
+      console.log("[Google Drive] - Existing file name:", existingFile.name);
+      console.log("[Google Drive] ========================================");
+
+      return {
+        success: true,
+        fileId: existingFile.id,
+        fileName: existingFile.name,
+      };
+    }
 
     // Upload file
+    console.log("[Google Drive] File does not exist - proceeding with upload");
+    console.log("[Google Drive] - File size:", config.fileBlob.size, "bytes");
+
     const uploadedFile = await uploadFile(
       token,
       config.fileName,
       config.fileBlob,
-      campaignFolderId
+      campaignFolderId,
+      driveId
     );
-    console.log("[Google Drive] File uploaded successfully:", uploadedFile);
+
+    console.log("[Google Drive] ✅ STEP 2/2 COMPLETE");
+    console.log("[Google Drive] - Uploaded file ID:", uploadedFile.id);
+    console.log("[Google Drive] - Uploaded file name:", uploadedFile.name);
+
+    // Validate the upload result
+    if (!uploadedFile.id || uploadedFile.id === "upload-succeeded") {
+      console.warn("[Google Drive] ⚠️ WARNING: File upload may have failed - placeholder ID returned");
+      console.warn("[Google Drive] This usually means the file upload succeeded but verification failed");
+      console.warn("[Google Drive] Check Google Drive manually to confirm file exists");
+    }
+
+    console.log("[Google Drive] ========================================");
 
     return {
       success: true,

@@ -106,14 +106,10 @@ export default function URLReplacerPopup() {
               if (regionInfo) {
                 // Map detected region to button region format
                 const regionMap: Record<string, "PH" | "US" | "ID" | "MY"> = {
-                  "TEST_PH": "PH",
-                  "TEST_US": "US",
-                  "TEST_ID": "ID",
-                  "TEST_MY": "MY",
-                  "WEST_US": "US",
-                  "EAST_PH": "PH",
-                  "EAST_MY": "MY",
-                  "EAST_ID": "ID"
+                  "2.WEST_US": "US",
+                  "1.EAST_PH": "PH",
+                  "1.EAST_MY": "MY",
+                  "1.EAST_ID": "ID"
                 };
 
                 const buttonRegion = regionMap[regionInfo.region];
@@ -354,14 +350,10 @@ export default function URLReplacerPopup() {
           if (regionInfo) {
             // Map detected region to button region format
             const regionMap: Record<string, "PH" | "US" | "ID" | "MY"> = {
-              "TEST_PH": "PH",
-              "TEST_US": "US",
-              "TEST_ID": "ID",
-              "TEST_MY": "MY",
-              "WEST_US": "US",
-              "EAST_PH": "PH",
-              "EAST_MY": "MY",
-              "EAST_ID": "ID"
+              "2.WEST_US": "US",
+              "1.EAST_PH": "PH",
+              "1.EAST_MY": "MY",
+              "1.EAST_ID": "ID"
             };
 
             const buttonRegion = regionMap[regionInfo.region];
@@ -844,15 +836,17 @@ export default function URLReplacerPopup() {
                               <div className="flex items-center gap-2 pt-2 border-t border-border/30">
                                 {(["PH", "US", "ID", "MY"] as const).map((region) => {
                                   const isSelected = campaignRegions.get(campaign.id) === region;
+                                  const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
                                   return (
                                     <Button
                                       key={region}
-                                      onClick={() => handleRegionSelect(campaign.id, region)}
+                                      onClick={() => !isCompleted && handleRegionSelect(campaign.id, region)}
                                       variant="outline"
                                       size="sm"
+                                      disabled={isCompleted}
                                       className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${
                                         isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
-                                      }`}
+                                      } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
                                     >
                                       {region}
                                     </Button>
@@ -947,15 +941,17 @@ export default function URLReplacerPopup() {
                                   <div className="flex items-center gap-2 pt-2 border-t border-border/30">
                                     {(["PH", "US", "ID", "MY"] as const).map((region) => {
                                       const isSelected = campaignRegions.get(campaign.id) === region;
+                                      const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
                                       return (
                                         <Button
                                           key={region}
-                                          onClick={() => handleRegionSelect(campaign.id, region)}
+                                          onClick={() => !isCompleted && handleRegionSelect(campaign.id, region)}
                                           variant="outline"
                                           size="sm"
+                                          disabled={isCompleted}
                                           className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${
                                             isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
-                                          }`}
+                                          } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
                                         >
                                           {region}
                                         </Button>

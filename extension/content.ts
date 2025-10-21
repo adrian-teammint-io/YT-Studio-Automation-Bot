@@ -451,7 +451,7 @@ async function injectUploadStatusToast(): Promise<void> {
   styleTag.textContent = `
     .gmv-max-upload-status-toast {
       position: fixed;
-      bottom: 180px;
+      bottom: 184px;
       right: 32px;
       z-index: 10000;
       background: white;
@@ -545,38 +545,71 @@ async function injectProgressToast(): Promise<void> {
     position: fixed;
   `;
 
-  // Create refetch button (hidden by default, shown on hover)
+  // Create refetch button (always visible next to campaign number)
   const refetchBtn = document.createElement("button");
   refetchBtn.id = "gmv-max-refetch-btn";
-  refetchBtn.textContent = "Refetch";
   refetchBtn.className = "gmv-max-refetch-btn";
+  refetchBtn.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+    </svg>
+  `;
   refetchBtn.style.cssText = `
-    display: none;
-    margin-left: 8px;
-    padding: 4px 8px;
-    font-size: 12px;
-    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 5px;
+    padding: 4px;
+    width: 24px;
+    height: 24px;
     border: 2px solid black;
     background: #f1f5f9;
     cursor: pointer;
     box-shadow: 0.15rem 0.15rem 0 0 black;
   `;
 
-  // Show button on toast hover via events (robust in content scripts)
-  toast.addEventListener("mouseenter", () => {
-    refetchBtn.style.display = "inline-flex";
-  });
-  toast.addEventListener("mouseleave", () => {
-    refetchBtn.style.display = "none";
-  });
-
   // Click handler to ask background to re-check Drive and update statuses
   refetchBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const originalText = toast.textContent || "";
-    toast.textContent = "Refreshing...";
-    refetchBtn.disabled = true as any;
-    refetchBtn.style.cursor = "not-allowed";
+
+    // Prevent multiple simultaneous requests but allow re-clicking after completion
+    if (refetchBtn.classList.contains("refetching")) {
+      return;
+    }
+
+    refetchBtn.classList.add("refetching");
+    const originalHTML = refetchBtn.innerHTML;
+
+    // Show "로딩 중..." text
+    const countSpan = document.getElementById("gmv-max-progress-count");
+    const originalCountText = countSpan?.textContent || "";
+    if (countSpan) {
+      countSpan.textContent = "로딩 중...";
+    }
+
+    // Show spinner animation in button
+    refetchBtn.innerHTML = `
+      <svg class="refetch-spinner" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+      </svg>
+    `;
+
+    // Add spinner animation style
+    const spinnerStyle = document.createElement("style");
+    spinnerStyle.textContent = `
+      .refetch-spinner {
+        animation: refetch-spin 1s linear infinite;
+      }
+      @keyframes refetch-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+    `;
+    if (!document.getElementById("refetch-spinner-style")) {
+      spinnerStyle.id = "refetch-spinner-style";
+      document.head.appendChild(spinnerStyle);
+    }
+
     try {
       await new Promise<void>((resolve, reject) => {
         chrome.runtime.sendMessage({ type: "REFETCH_UPLOAD_STATUSES" }, (response) => {
@@ -592,12 +625,11 @@ async function injectProgressToast(): Promise<void> {
         });
       });
     } catch (_) {
-      // Keep silent in content UI, rely on progress numbers updating when possible
+      // Keep silent in content UI, rely on progress updating when possible
     } finally {
       await updateProgressToast();
-      toast.textContent = originalText;
-      refetchBtn.disabled = false as any;
-      refetchBtn.style.cursor = "pointer";
+      refetchBtn.innerHTML = originalHTML;
+      refetchBtn.classList.remove("refetching");
     }
   });
 
@@ -605,8 +637,9 @@ async function injectProgressToast(): Promise<void> {
   const wrapper = document.createElement("div");
   wrapper.style.display = "flex";
   wrapper.style.alignItems = "center";
-  wrapper.style.justifyContent = "center";
+  wrapper.style.justifyContent = "space-between";
   wrapper.style.gap = "8px";
+  wrapper.style.width = "100%";
 
   const countSpan = document.createElement("span");
   countSpan.id = "gmv-max-progress-count";
@@ -639,11 +672,13 @@ async function updateProgressToast(): Promise<void> {
     const uploaded = total === 0 ? 0 : campaigns.filter((c) => successStatuses[c.name]?.status === "success").length;
 
     if (total > 0) {
+      // Show progress numbers by default, will be hidden on hover
       const countSpan = document.getElementById("gmv-max-progress-count");
       if (countSpan) {
         countSpan.textContent = `${uploaded}/${total}`;
+        countSpan.style.display = "inline";
       } else {
-        toast.textContent = `${uploaded}/${total}`;
+        toast.textContent = ` ${uploaded}/${total}`;
       }
       toast.style.display = "flex";
     } else {
