@@ -291,6 +291,66 @@ async function goToPrevCampaign(): Promise<void> {
 }
 
 /**
+ * Navigate to the first uncompleted campaign in the list
+ */
+async function goToFirstCampaign(): Promise<void> {
+  try {
+    const result = await chrome.storage.local.get([
+      "gmv_max_campaign_data",
+      "gmv_max_base_url",
+      "gmv_max_upload_success_status",
+    ]);
+
+    const campaigns = result.gmv_max_campaign_data || [];
+    const baseUrl = result.gmv_max_base_url;
+    const uploadSuccessStatus = result.gmv_max_upload_success_status || {};
+
+    if (campaigns.length === 0) {
+      alert("No campaigns available");
+      return;
+    }
+
+    if (!baseUrl) {
+      alert("No base URL configured. Please configure it in the extension popup.");
+      return;
+    }
+
+    // Find the first uncompleted campaign
+    let firstIndex = -1;
+    for (let i = 0; i < campaigns.length; i++) {
+      const campaign = campaigns[i];
+      const uploadStatus = uploadSuccessStatus[campaign.name];
+
+      // Skip completed campaigns
+      if (!uploadStatus || uploadStatus.status !== "success") {
+        firstIndex = i;
+        break;
+      }
+    }
+
+    if (firstIndex === -1) {
+      alert("All campaigns completed! 🎉");
+      return;
+    }
+
+    // Navigate to first uncompleted campaign
+    const campaign = campaigns[firstIndex];
+    const urlObj = new URL(baseUrl);
+    urlObj.searchParams.set("campaign_id", campaign.id);
+    const newUrl = urlObj.toString();
+
+    // Update current index
+    await chrome.storage.local.set({ gmv_max_current_index: firstIndex.toString() });
+
+    console.log(`[GMV Max Navigator] Navigating to first campaign: ${campaign.name}`);
+    window.location.href = newUrl;
+  } catch (error) {
+    console.error("[GMV Max Navigator] Error navigating to first campaign:", error);
+    alert("Failed to navigate to first campaign");
+  }
+}
+
+/**
  * Navigate to the next uncompleted campaign
  */
 async function goToNextCampaign(): Promise<void> {
@@ -563,7 +623,7 @@ async function injectProgressToast(): Promise<void> {
     width: 24px;
     height: 24px;
     border: 2px solid black;
-    background: #f1f5f9;
+    background: #ffffff;
     cursor: pointer;
     box-shadow: 0.15rem 0.15rem 0 0 black;
   `;
@@ -729,17 +789,28 @@ async function updateControlButtons(): Promise<void> {
 
   if (stopButton && resumeButton) {
     // Check if campaigns are configured
-    const result = await chrome.storage.local.get(["gmv_max_campaign_data", "gmv_max_base_url"]);
+    const result = await chrome.storage.local.get([
+      "gmv_max_campaign_data",
+      "gmv_max_base_url",
+      "gmv_max_upload_success_status",
+    ]);
     const campaigns = result.gmv_max_campaign_data || [];
     const baseUrl = result.gmv_max_base_url;
+    const successStatuses: Record<string, { status: string }> = result.gmv_max_upload_success_status || {};
     const isConfigured = campaigns.length > 0 && baseUrl;
 
-    // Disable buttons if not configured
-    stopButton.disabled = !isConfigured;
-    resumeButton.disabled = !isConfigured;
+    // Check if progress is full (all campaigns uploaded)
+    const total = campaigns.length;
+    const uploaded = total === 0 ? 0 : campaigns.filter((c: { name: string }) => successStatuses[c.name]?.status === "success").length;
+    const isProgressFull = total > 0 && uploaded === total;
+
+    // Disable buttons if not configured OR if progress is full
+    const shouldDisable = !isConfigured || isProgressFull;
+    stopButton.disabled = shouldDisable;
+    resumeButton.disabled = shouldDisable;
 
     // Update opacity to show disabled state
-    if (!isConfigured) {
+    if (shouldDisable) {
       stopButton.style.opacity = "0.5";
       stopButton.style.cursor = "not-allowed";
       resumeButton.style.opacity = "0.5";
@@ -885,23 +956,23 @@ async function injectControlButtons(): Promise<void> {
   });
 
   // Stop button click handler
-  stopButton.addEventListener("click", () => {
+  stopButton.addEventListener("click", async () => {
     if (stopButton.disabled) return;
     isAutoNavigationPaused = true;
 
     // Persist workflow paused state to localStorage
     chrome.storage.local.set({ [WORKFLOW_PAUSED_KEY]: true });
 
-    updateControlButtons();
+    await updateControlButtons();
     console.log("[GMV Max Navigator] Auto-navigation paused");
     updateUploadStatusToast("idle");
   });
 
   // Resume button click handler
-  resumeButton.addEventListener("click", () => {
+  resumeButton.addEventListener("click", async () => {
     if (resumeButton.disabled) return;
 
-    console.log("[GMV Max Navigator] Auto-navigation resumed, starting auto-click workflow");
+    console.log("[GMV Max Navigator] Auto-navigation resumed, navigating to first campaign");
     isAutoNavigationPaused = false;
 
     // Persist workflow resumed state to localStorage
@@ -910,8 +981,8 @@ async function injectControlButtons(): Promise<void> {
     // Reset the click flag to allow clicking again
     hasClickedExportButton = false;
 
-    // Start the auto-click attempts immediately
-    attemptAutoClick();
+    // Navigate to the first uncompleted campaign
+    await goToFirstCampaign();
 
     // Update control buttons to show stop button
     updateControlButtons();

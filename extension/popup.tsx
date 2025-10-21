@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { POPUP_WIDTH } from "./constants/ui";
-import { ChevronLeft, Settings, Trash2, Loader2, CheckCircle2, XCircle, Cat, FolderOpen } from "lucide-react";
+import { ChevronLeft, Settings, Trash2, Loader2, CheckCircle2, XCircle, Cat, FolderOpen, CatIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { detectRegionFromCampaign } from "./utils/region-detector";
+import { findCampaignFolder } from "./services/google-drive";
 
 /**
  * Campaign Navigator popup component for Chrome extension.
@@ -508,12 +509,35 @@ export default function URLReplacerPopup() {
         return;
       }
 
-      // Construct Google Drive folder URL
-      // Campaign folders are created inside the parent folder, so we navigate to the parent
-      const googleDriveFolderUrl = `https://drive.google.com/drive/folders/${regionInfo.folderId}`;
+      // Show loading toast while searching for campaign folder
+      toast.loading("Searching for campaign folder...");
+
+      // Find the campaign folder within the region folder
+      const campaignFolderId = await findCampaignFolder(campaign.name, regionInfo.folderId);
+
+      // Dismiss loading toast
+      toast.dismiss();
+
+      if (!campaignFolderId) {
+        // If campaign folder doesn't exist yet, navigate to the region folder
+        toast.error(`Campaign folder not found. Opening region folder instead.`);
+        const googleDriveFolderUrl = `https://drive.google.com/drive/folders/${regionInfo.folderId}`;
+
+        if (typeof chrome !== "undefined" && chrome.tabs) {
+          await chrome.tabs.create({ url: googleDriveFolderUrl });
+          setCurrentIndex(index);
+          localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, index.toString());
+          window.close();
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      // Construct Google Drive folder URL for the campaign folder
+      const googleDriveFolderUrl = `https://drive.google.com/drive/folders/${campaignFolderId}`;
 
       if (typeof chrome !== "undefined" && chrome.tabs) {
-        // Open Google Drive folder in a new tab
+        // Open campaign folder in a new tab
         await chrome.tabs.create({ url: googleDriveFolderUrl });
 
         // Update current index
@@ -521,7 +545,7 @@ export default function URLReplacerPopup() {
         localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, index.toString());
 
         // Show success toast
-        toast.success(`Opening Google Drive folder for ${regionInfo.region}`);
+        toast.success(`Opening campaign folder: ${campaign.name}`);
 
         // Close the popup after successful navigation
         window.close();
@@ -565,15 +589,20 @@ export default function URLReplacerPopup() {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
         if (tab.id) {
+          // Show redirect toast notification with custom style
+          toast.loading("리디렉션 중...", {
+            style: {
+              bottom: "184px",
+            },
+            duration: 2000,
+          });
+
           // Update the tab's URL to navigate and trigger auto-click
           await chrome.tabs.update(tab.id, { url: newUrl });
 
           // Update current index
           setCurrentIndex(index);
           localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, index.toString());
-
-          // Show toast notification
-          toast.success(`Workflow started for ${campaign.name}`);
 
           // Close the popup after successful navigation
           window.close();
@@ -720,7 +749,8 @@ export default function URLReplacerPopup() {
                 <div className="flex items-center gap-2">
                   <h2 className="text-2xl font-semibold text-foreground">
                     {/* Campaign Navigator */}
-                    캠페인 네비게이터
+                    {/* 캠페인 네비게이터 */}
+                    GMV Max Automation Bot
                   </h2>
                   <Badge>team-mint.io</Badge>
                   <Badge variant="secondary">Global Team</Badge>
@@ -807,7 +837,7 @@ export default function URLReplacerPopup() {
                                   )}
 
                                   {/* Cat Icon Button - Trigger download->upload workflow */}
-                                  <Button
+                                  {/* <Button
                                     onClick={(e) => triggerWorkflow(index, e)}
                                     disabled={!baseUrl.trim() || isLoading}
                                     variant="outline"
@@ -815,8 +845,8 @@ export default function URLReplacerPopup() {
                                     className="shadow-brutal-button rounded-none h-8 w-8 p-0"
                                     title="Start download and upload workflow"
                                   >
-                                    <Cat className="size-4" />
-                                  </Button>
+                                    <CatIcon className="size-4" />
+                                  </Button> */}
 
                                   {/* Google Drive Icon Button - Open Google Drive folder */}
                                   <Button
@@ -833,7 +863,7 @@ export default function URLReplacerPopup() {
                               </div>
 
                               {/* Bottom Row: Region Selection Buttons */}
-                              <div className="flex items-center gap-2 pt-2 border-t border-border/30">
+                              <div className="flex items-center gap-2">
                                 {(["PH", "US", "ID", "MY"] as const).map((region) => {
                                   const isSelected = campaignRegions.get(campaign.id) === region;
                                   const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
@@ -844,7 +874,7 @@ export default function URLReplacerPopup() {
                                       variant="outline"
                                       size="sm"
                                       disabled={isCompleted}
-                                      className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${
+                                      className={`flex-1 h-7 max-w-[50px] text-xs shadow-brutal-button rounded-none transition-colors ${
                                         isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
                                       } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
                                     >

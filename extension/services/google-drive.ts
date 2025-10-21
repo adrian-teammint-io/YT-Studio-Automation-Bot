@@ -176,6 +176,36 @@ async function findFolder(
 }
 
 /**
+ * Find campaign folder by campaign name within a region parent folder
+ * Exported for use in popup to navigate to campaign folders
+ */
+export async function findCampaignFolder(
+  campaignName: string,
+  regionParentFolderId: string
+): Promise<string | null> {
+  try {
+    console.log("[Google Drive] Finding campaign folder:", campaignName);
+    console.log("[Google Drive] In region folder:", regionParentFolderId);
+
+    const token = await getAuthToken();
+    const driveId = await getSharedDriveId(token, regionParentFolderId);
+
+    const folderId = await findFolder(token, campaignName, regionParentFolderId, driveId);
+
+    if (folderId) {
+      console.log("[Google Drive] ✅ Found campaign folder:", folderId);
+    } else {
+      console.log("[Google Drive] ❌ Campaign folder not found");
+    }
+
+    return folderId;
+  } catch (error) {
+    console.error("[Google Drive] Error finding campaign folder:", error);
+    return null;
+  }
+}
+
+/**
  * Create a new folder in Google Drive
  * Supports Shared Drives (required for service account uploads)
  */
