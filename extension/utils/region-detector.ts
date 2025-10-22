@@ -27,22 +27,22 @@ export interface RegionMapping {
 export const REGION_MAPPINGS: RegionMapping[] = [
   {
     region: "2.WEST_US",
-    folderId: "13lPkdut0NT3IJ881H30eGfc7hwNctvfQ", // 2.WEST_US (Shared Drive)
+    folderId: "1kyao3_UQjYFuzjKDGmf66QpDsYn9dM_p", // 2.WEST_US (Shared Drive)
     pattern: /_US_/i, // Match campaigns containing "_US_" (case-insensitive)
   },
   {
     region: "1.EAST_PH",
-    folderId: "1HUY24amItYGEnTE2TTemzDuX1DeRmmcu", // 1.EAST_PH (Shared Drive)
+    folderId: "1nX2nVy-Oa2r9o-tke9EIci-Za7iCxl48", // 1.EAST_PH (Shared Drive)
     pattern: /_PH_/i, // Match campaigns containing "_PH_" (case-insensitive)
   },
   {
     region: "1.EAST_MY",
-    folderId: "1iXfMl3rdukxRI1fnJ0qhQjS6ZL82HzDf", // 1.EAST_MY (Shared Drive)
+    folderId: "1QPXQu2xHKi441YE_UhpXU_t37UJSA2cv", // 1.EAST_MY (Shared Drive)
     pattern: /_MY_/i, // Match campaigns containing "_MY_" (case-insensitive)
   },
   {
     region: "1.EAST_ID",
-    folderId: "1Ct0DX06OKqJmpbaB5q6Xlnwu1UHKYjOV", // 1.EAST_ID (Shared Drive)
+    folderId: "1NGFgCLmFu1If39D8XQnolOV5t1zPVrRm", // 1.EAST_ID (Shared Drive)
     pattern: /_ID_/i, // Match campaigns containing "_ID_" (case-insensitive)
   },
 ];

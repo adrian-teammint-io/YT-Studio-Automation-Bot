@@ -183,12 +183,21 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string):
         
         if (fileResponse.ok) {
           const fileData = await fileResponse.json();
-          const existingFile = fileData.files?.find((file: any) => file.name.includes(campaignId));
-          
+
+          // Check if any file matches BOTH campaign ID AND today's date
+          // File format: "Product data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}"
+          const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+          const expectedFileName = `Product data ${today} - ${today} - Campaign ${campaignId}`;
+
+          const existingFile = fileData.files?.find((file: any) => {
+            // Exact file name match ensures both date and campaign ID are correct
+            return file.name === expectedFileName;
+          });
+
           if (existingFile) {
             console.log("[Background] ✅ File already exists in Google Drive:", existingFile.name);
             console.log("[Background] Skipping download and upload - marking as success");
-            
+
             // Broadcast success status immediately
             broadcastUploadStatus({
               type: "UPLOAD_STATUS",
@@ -196,7 +205,7 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string):
               campaignName,
               fileName: existingFile.name,
             });
-            
+
             return; // Exit early - no need to download or upload
           }
         }
@@ -395,15 +404,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             if (fileResp.ok) {
               const fileData = await fileResp.json();
-              // Check if any file contains the campaign ID in its filename
+
+              // Check if any file matches BOTH campaign ID AND today's date
+              // File format: "Product data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}"
+              const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+              const expectedFileName = `Product data ${today} - ${today} - Campaign ${campaign.id}`;
+
               const hasMatchingFile = Array.isArray(fileData.files) &&
-                fileData.files.some((file: any) => file.name.includes(campaign.id));
+                fileData.files.some((file: any) => file.name === expectedFileName);
 
               if (hasMatchingFile) {
-                // Found .xlsx file with campaign ID in filename - mark as success
+                // Found .xlsx file with exact filename match (date + campaign ID) - mark as success
                 updatedStatuses[campaign.name] = { status: "success" } as any;
               } else {
-                // Folder exists but no file with campaign ID - remove success status if previously set
+                // Folder exists but no file with exact match - remove success status if previously set
                 if (updatedStatuses[campaign.name]?.status === "success") {
                   delete updatedStatuses[campaign.name];
                 }
