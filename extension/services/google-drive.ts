@@ -17,6 +17,10 @@ export interface GoogleDriveConfig {
   campaignFolderName: string;
   fileName: string;
   fileBlob: Blob;
+  // Optional validation params - if provided, will verify file matches these values
+  expectedStartDate?: string;  // Format: "YYYY-MM-DD"
+  expectedEndDate?: string;    // Format: "YYYY-MM-DD"
+  expectedCampaignId?: string; // Campaign ID to validate
 }
 
 export interface UploadResult {
@@ -270,20 +274,94 @@ async function getOrCreateFolder(
 }
 
 /**
+ * Parsed file name data for Product Data exports
+ */
+interface ParsedFileName {
+  startDate: string;     // Format: "YYYY-MM-DD"
+  endDate: string;       // Format: "YYYY-MM-DD"
+  campaignId: string;    // Campaign ID extracted from file name
+  isValid: boolean;      // Whether parsing was successful
+}
+
+/**
+ * Parse Product Data file name to extract dates and campaign ID
+ * Expected format: "Product data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}"
+ *
+ * @param fileName - The file name to parse
+ * @returns ParsedFileName object with extracted data
+ *
+ * @example
+ * parseProductDataFileName("Product data 2025-10-21 - 2025-10-21 - Campaign 1835163019217953")
+ * // Returns: { startDate: "2025-10-21", endDate: "2025-10-21", campaignId: "1835163019217953", isValid: true }
+ */
+function parseProductDataFileName(fileName: string): ParsedFileName {
+  const invalid: ParsedFileName = { startDate: "", endDate: "", campaignId: "", isValid: false };
+
+  try {
+    // Pattern: "Product data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}"
+    // Using regex to extract: start date, end date, campaign ID
+    const pattern = /^Product data (\d{4}-\d{2}-\d{2}) - (\d{4}-\d{2}-\d{2}) - Campaign (\d+)/;
+    const match = fileName.match(pattern);
+
+    if (!match) {
+      console.log(`[Google Drive] Failed to parse file name: ${fileName}`);
+      return invalid;
+    }
+
+    const [, startDate, endDate, campaignId] = match;
+
+    console.log(`[Google Drive] Parsed file name:`, { startDate, endDate, campaignId });
+
+    return {
+      startDate,
+      endDate,
+      campaignId,
+      isValid: true,
+    };
+  } catch (error) {
+    console.error(`[Google Drive] Error parsing file name:`, error);
+    return invalid;
+  }
+}
+
+/**
  * Upload a file to Google Drive
  */
 /**
  * Check if a file already exists in Google Drive folder
  * Returns the file if it exists, null otherwise
+ *
+ * Enhanced with optional validation for start date, end date, and campaign ID
+ * When validation params provided, only returns file if all match
+ *
+ * @param token - OAuth access token
+ * @param fileName - Name of file to search for
+ * @param folderId - Parent folder ID
+ * @param driveId - Shared Drive ID (optional)
+ * @param expectedStartDate - Expected start date in YYYY-MM-DD format (optional)
+ * @param expectedEndDate - Expected end date in YYYY-MM-DD format (optional)
+ * @param expectedCampaignId - Expected campaign ID (optional)
  */
 async function checkFileExists(
   token: string,
   fileName: string,
   folderId: string,
-  driveId?: string | null
+  driveId?: string | null,
+  expectedStartDate?: string,
+  expectedEndDate?: string,
+  expectedCampaignId?: string
 ): Promise<{ id: string; name: string } | null> {
   try {
     console.log(`[Google Drive] Checking if file exists: ${fileName} in folder ${folderId}`);
+
+    // Log validation params if provided
+    if (expectedStartDate || expectedEndDate || expectedCampaignId) {
+      console.log(`[Google Drive] Validation params:`, {
+        expectedStartDate,
+        expectedEndDate,
+        expectedCampaignId,
+      });
+    }
 
     const searchQuery = encodeURIComponent(
       `name='${fileName}' and '${folderId}' in parents and trashed=false`
@@ -309,10 +387,50 @@ async function checkFileExists(
     const data = await response.json();
 
     if (data.files && data.files.length > 0) {
-      console.log(`[Google Drive] ✅ File already exists: ${fileName}`);
+      const foundFile = data.files[0];
+      console.log(`[Google Drive] ✅ Found file: ${foundFile.name}`);
+
+      // If validation params provided, verify file matches expected values
+      if (expectedStartDate || expectedEndDate || expectedCampaignId) {
+        console.log(`[Google Drive] Validating file name against expected values...`);
+
+        const parsed = parseProductDataFileName(foundFile.name);
+
+        if (!parsed.isValid) {
+          console.warn(`[Google Drive] ⚠️ File name doesn't match expected format, skipping validation`);
+          // Fall back to simple name match if parsing fails
+          return {
+            id: foundFile.id,
+            name: foundFile.name,
+          };
+        }
+
+        // Validate each field if expected value provided
+        const validations = {
+          startDate: !expectedStartDate || parsed.startDate === expectedStartDate,
+          endDate: !expectedEndDate || parsed.endDate === expectedEndDate,
+          campaignId: !expectedCampaignId || parsed.campaignId === expectedCampaignId,
+        };
+
+        const allValid = validations.startDate && validations.endDate && validations.campaignId;
+
+        console.log(`[Google Drive] Validation results:`, {
+          startDate: validations.startDate ? '✓' : `✗ (expected: ${expectedStartDate}, got: ${parsed.startDate})`,
+          endDate: validations.endDate ? '✓' : `✗ (expected: ${expectedEndDate}, got: ${parsed.endDate})`,
+          campaignId: validations.campaignId ? '✓' : `✗ (expected: ${expectedCampaignId}, got: ${parsed.campaignId})`,
+        });
+
+        if (!allValid) {
+          console.warn(`[Google Drive] ❌ File validation failed - file does not match expected criteria`);
+          return null;
+        }
+
+        console.log(`[Google Drive] ✅ File validation passed - all criteria match`);
+      }
+
       return {
-        id: data.files[0].id,
-        name: data.files[0].name,
+        id: foundFile.id,
+        name: foundFile.name,
       };
     }
 
@@ -560,11 +678,39 @@ export async function uploadToGoogleDrive(config: GoogleDriveConfig): Promise<Up
     console.log("[Google Drive] - File name:", config.fileName);
     console.log("[Google Drive] - Target folder:", campaignFolderId);
 
+    // Extract validation params if provided in config
+    const { expectedStartDate, expectedEndDate, expectedCampaignId } = config;
+
+    // If validation params not provided in config, try to extract from file name
+    let startDateToValidate = expectedStartDate;
+    let endDateToValidate = expectedEndDate;
+    let campaignIdToValidate = expectedCampaignId;
+
+    if (!startDateToValidate && !endDateToValidate && !campaignIdToValidate) {
+      console.log("[Google Drive] No validation params in config, extracting from file name...");
+      const parsed = parseProductDataFileName(config.fileName);
+      if (parsed.isValid) {
+        startDateToValidate = parsed.startDate;
+        endDateToValidate = parsed.endDate;
+        campaignIdToValidate = parsed.campaignId;
+        console.log("[Google Drive] Extracted validation params from file name:", {
+          startDateToValidate,
+          endDateToValidate,
+          campaignIdToValidate,
+        });
+      } else {
+        console.log("[Google Drive] Could not extract validation params from file name");
+      }
+    }
+
     const existingFile = await checkFileExists(
       token,
       config.fileName,
       campaignFolderId,
-      driveId
+      driveId,
+      startDateToValidate,
+      endDateToValidate,
+      campaignIdToValidate
     );
 
     if (existingFile) {

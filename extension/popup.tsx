@@ -37,19 +37,105 @@ interface UploadStatus {
 
 const STORAGE_KEYS = {
   CAMPAIGN_DATA: "gmv_max_campaign_data",
-  BASE_URL: "gmv_max_base_url",
   CURRENT_INDEX: "gmv_max_current_index",
   COMPLETED_CAMPAIGNS: "gmv_max_completed_campaigns",
   AUTO_CLICK_ENABLED: "gmv_max_auto_click_enabled",
   LAST_UPLOAD_STATUS: "lastUploadStatus",
   UPLOAD_SUCCESS_STATUS: "gmv_max_upload_success_status", // Persistent upload success tracking
   CAMPAIGN_REGIONS: "gmv_max_campaign_regions", // Store region selections per campaign
+  DATE_RANGE: "gmv_max_date_range", // Store start/end date values
 };
+
+// Region configuration with aadvid, oec_seller_id, and bc_id
+const REGION_CONFIG = {
+  US: {
+    aadvid: "6860053951073484806",
+    oec_seller_id: "7495275617887947202",
+    bc_id: "7278556643061792769",
+    utcOffset: 9, // UTC+09:00
+  },
+  ID: {
+    aadvid: "7208105767293992962",
+    oec_seller_id: "7494928748302076708",
+    bc_id: "7208106862128939009",
+    utcOffset: 7, // UTC+07:00
+  },
+  PH: {
+    aadvid: "7265198676149075969",
+    oec_seller_id: "7495168184921196786",
+    bc_id: "7265198572054888449",
+    utcOffset: 8, // UTC+08:00
+  },
+  MY: {
+    aadvid: "7525257295555772423",
+    oec_seller_id: "7496261644146150198",
+    bc_id: "7525256178398674952",
+    utcOffset: 8, // UTC+08:00
+  },
+} as const;
+
+const BASE_URL = "https://ads.tiktok.com/i18n/gmv-max/dashboard/product";
+
+/**
+ * Convert region-specific date to timestamp
+ * @param region - Region code (US, ID, MY, PH)
+ * @param year - Year (e.g., 2025)
+ * @param month - Month (1-12)
+ * @param day - Day of month (1-31)
+ * @param hour - Hour (0-23, default 0)
+ * @param minute - Minute (0-59, default 0)
+ * @param second - Second (0-59, default 0)
+ * @returns Timestamp in milliseconds
+ */
+function regionDateToTimestamp(
+  region: "US" | "ID" | "MY" | "PH",
+  year: number,
+  month: number,
+  day: number,
+  hour: number = 0,
+  minute: number = 0,
+  second: number = 0
+): number {
+  const offset = REGION_CONFIG[region].utcOffset;
+
+  // Convert the region's local time to UTC
+  const utcDate = new Date(Date.UTC(year, month - 1, day, hour - offset, minute, second));
+
+  return utcDate.getTime(); // returns timestamp in milliseconds
+}
+
+/**
+ * Build campaign URL with region-specific parameters
+ * @param region - Region code
+ * @param campaignId - Campaign ID
+ * @param startTimestamp - Start date timestamp
+ * @param endTimestamp - End date timestamp
+ * @returns Complete campaign URL
+ */
+function buildCampaignUrl(
+  region: "US" | "ID" | "MY" | "PH",
+  campaignId: string,
+  startTimestamp: number,
+  endTimestamp: number
+): string {
+  const config = REGION_CONFIG[region];
+  const params = new URLSearchParams({
+    aadvid: config.aadvid,
+    oec_seller_id: config.oec_seller_id,
+    bc_id: config.bc_id,
+    type: "product",
+    campaign_id: campaignId,
+    list_status: "delivery_ok",
+    campaign_start_date: startTimestamp.toString(),
+    campaign_end_date: endTimestamp.toString(),
+  });
+
+  return `${BASE_URL}?${params.toString()}`;
+}
 
 export default function URLReplacerPopup() {
   const [isLoading, setIsLoading] = React.useState(false);
   const [campaignDataText, setCampaignDataText] = React.useState("");
-  const [baseUrl, setBaseUrl] = React.useState("");
   const [currentIndex, setCurrentIndex] = React.useState(0);
   const [campaigns, setCampaigns] = React.useState<Campaign[]>([]);
   const [isSettingsView, setIsSettingsView] = React.useState(false);
@@ -58,37 +144,65 @@ export default function URLReplacerPopup() {
   const [uploadStatuses, setUploadStatuses] = React.useState<Map<string, UploadStatus>>(new Map());
   const activeToastsRef = React.useRef<Map<string, string | number>>(new Map());
   const [lastSavedCampaignData, setLastSavedCampaignData] = React.useState("");
-  const [lastSavedBaseUrl, setLastSavedBaseUrl] = React.useState("");
   const [campaignRegions, setCampaignRegions] = React.useState<Map<string, "PH" | "US" | "ID" | "MY">>(new Map());
 
-  // Check if base URL contains required date parameters
-  const hasRequiredDateParams = React.useMemo(() => {
-    if (!baseUrl.trim()) return false;
-    try {
-      const url = new URL(baseUrl);
-      const hasStartDate = url.searchParams.has("campaign_start_date");
-      const hasEndDate = url.searchParams.has("campaign_end_date");
-      return hasStartDate && hasEndDate;
-    } catch {
-      return false;
-    }
-  }, [baseUrl]);
+  // Date range state
+  const [startYear, setStartYear] = React.useState(new Date().getFullYear());
+  const [startMonth, setStartMonth] = React.useState(new Date().getMonth() + 1);
+  const [startDay, setStartDay] = React.useState(new Date().getDate());
+  const [endYear, setEndYear] = React.useState(new Date().getFullYear());
+  const [endMonth, setEndMonth] = React.useState(new Date().getMonth() + 1);
+  const [endDay, setEndDay] = React.useState(new Date().getDate());
 
-  // Check if base URL starts with the correct product dashboard path
-  const hasValidProductUrl = React.useMemo(() => {
-    if (!baseUrl.trim()) return false;
-    const requiredBasePath = "https://ads.tiktok.com/i18n/gmv-max/dashboard/product";
-    return baseUrl.startsWith(requiredBasePath);
-  }, [baseUrl]);
 
   // Load stored data on mount
   React.useEffect(() => {
-    const loadStoredData = () => {
+    const loadStoredData = async () => {
       try {
         const storedCampaignData = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_DATA);
-        const storedBaseUrl = localStorage.getItem(STORAGE_KEYS.BASE_URL);
         const storedIndex = localStorage.getItem(STORAGE_KEYS.CURRENT_INDEX);
         const storedCompletedCampaigns = localStorage.getItem(STORAGE_KEYS.COMPLETED_CAMPAIGNS);
+
+        // Load date range from chrome.storage.local (for content script sync) or fallback to localStorage
+        if (typeof chrome !== "undefined" && chrome.storage) {
+          const result = await chrome.storage.local.get([STORAGE_KEYS.DATE_RANGE]);
+          const dateRange = result[STORAGE_KEYS.DATE_RANGE];
+
+          if (dateRange) {
+            setStartYear(dateRange.startYear);
+            setStartMonth(dateRange.startMonth);
+            setStartDay(dateRange.startDay);
+            setEndYear(dateRange.endYear);
+            setEndMonth(dateRange.endMonth);
+            setEndDay(dateRange.endDay);
+          } else {
+            // Fallback to localStorage if not in chrome.storage.local
+            const storedDateRange = localStorage.getItem(STORAGE_KEYS.DATE_RANGE);
+            if (storedDateRange) {
+              const dateRange = JSON.parse(storedDateRange);
+              setStartYear(dateRange.startYear);
+              setStartMonth(dateRange.startMonth);
+              setStartDay(dateRange.startDay);
+              setEndYear(dateRange.endYear);
+              setEndMonth(dateRange.endMonth);
+              setEndDay(dateRange.endDay);
+              // Sync to chrome.storage.local
+              chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+            }
+          }
+        } else {
+          // Fallback to localStorage if chrome.storage is not available
+          const storedDateRange = localStorage.getItem(STORAGE_KEYS.DATE_RANGE);
+          if (storedDateRange) {
+            const dateRange = JSON.parse(storedDateRange);
+            setStartYear(dateRange.startYear);
+            setStartMonth(dateRange.startMonth);
+            setStartDay(dateRange.startDay);
+            setEndYear(dateRange.endYear);
+            setEndMonth(dateRange.endMonth);
+            setEndDay(dateRange.endDay);
+          }
+        }
 
         if (storedCampaignData) {
           const data = JSON.parse(storedCampaignData);
@@ -127,16 +241,17 @@ export default function URLReplacerPopup() {
             localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(existingRegions));
           }
 
+          // Always sync all regions to chrome.storage.local (for content script access)
+          if (typeof chrome !== "undefined" && chrome.storage && Object.keys(existingRegions).length > 0) {
+            chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_REGIONS]: existingRegions });
+          }
+
           // Set state with all regions (existing + new defaults)
           const regionsMap = new Map<string, "PH" | "US" | "ID" | "MY">();
           Object.entries(existingRegions).forEach(([campaignId, region]) => {
             regionsMap.set(campaignId, region as "PH" | "US" | "ID" | "MY");
           });
           setCampaignRegions(regionsMap);
-        }
-
-        if (storedBaseUrl) {
-          setBaseUrl(storedBaseUrl);
         }
 
         if (storedIndex) {
@@ -274,29 +389,39 @@ export default function URLReplacerPopup() {
   }, [campaignDataText]);
 
   /**
-   * Auto-save base URL when it changes (debounced)
+   * Auto-save date range when it changes (debounced)
    */
   React.useEffect(() => {
-    if (!baseUrl.trim()) return;
-
     const timer = setTimeout(() => {
-      saveBaseUrl(true); // Pass true for silent save
-    }, 500); // 500ms debounce
+      const dateRange = {
+        startYear,
+        startMonth,
+        startDay,
+        endYear,
+        endMonth,
+        endDay,
+      };
+
+      // Save to localStorage for popup state
+      localStorage.setItem(STORAGE_KEYS.DATE_RANGE, JSON.stringify(dateRange));
+
+      // Save to chrome.storage.local for content script access
+      if (typeof chrome !== "undefined" && chrome.storage) {
+        chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+      }
+    }, 500);
 
     return () => clearTimeout(timer);
-  }, [baseUrl]);
+  }, [startYear, startMonth, startDay, endYear, endMonth, endDay]);
 
   /**
    * Auto-save when navigating back to main page
    */
   React.useEffect(() => {
     if (!isSettingsView) {
-      // Save both when navigating back
+      // Save campaign data when navigating back
       if (campaignDataText.trim()) {
         saveCampaignData(true);
-      }
-      if (baseUrl.trim()) {
-        saveBaseUrl(true);
       }
     }
   }, [isSettingsView]);
@@ -369,6 +494,8 @@ export default function URLReplacerPopup() {
       // Save updated regions if we added new defaults
       if (hasNewRegions) {
         localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(existingRegions));
+        // Also save to chrome.storage.local for content script access
+        chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_REGIONS]: existingRegions });
       }
 
       // Update state with all regions (existing + new defaults)
@@ -393,30 +520,6 @@ export default function URLReplacerPopup() {
     }
   };
 
-  /**
-   * Save base URL to localStorage and chrome.storage.local
-   */
-  const saveBaseUrl = (silent = false) => {
-    try {
-      // Save to localStorage for popup state
-      localStorage.setItem(STORAGE_KEYS.BASE_URL, baseUrl);
-
-      // Save to chrome.storage.local to trigger content script updates
-      chrome.storage.local.set({ [STORAGE_KEYS.BASE_URL]: baseUrl });
-
-      // Update last saved state for UI indicator
-      setLastSavedBaseUrl(baseUrl);
-
-      // Show success toast only if not silent
-      if (!silent) {
-        toast.success("Base URL saved successfully");
-        setIsSettingsView(false);
-      }
-    } catch (error) {
-      console.error("Failed to save base URL:", error);
-      toast.error("Failed to save base URL");
-    }
-  };
 
   /**
    * Toggle auto-click feature on/off
@@ -450,12 +553,20 @@ export default function URLReplacerPopup() {
 
       // Reset all state
       setCampaignDataText("");
-      setBaseUrl("");
       setCampaigns([]);
       setCurrentIndex(0);
       setCompletedCampaigns(new Set());
       setAutoClickEnabled(true);
       setUploadStatuses(new Map());
+
+      // Reset date range to current date
+      const now = new Date();
+      setStartYear(now.getFullYear());
+      setStartMonth(now.getMonth() + 1);
+      setStartDay(now.getDate());
+      setEndYear(now.getFullYear());
+      setEndMonth(now.getMonth() + 1);
+      setEndDay(now.getDate());
 
       toast.success("All data cleared successfully");
     } catch (error) {
@@ -472,15 +583,87 @@ export default function URLReplacerPopup() {
       const newMap = new Map(prev);
       newMap.set(campaignId, region);
 
-      // Persist to localStorage
+      // Persist to localStorage and chrome.storage.local
       const regionsObj: Record<string, string> = {};
       newMap.forEach((value, key) => {
         regionsObj[key] = value;
       });
       localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(regionsObj));
 
+      // Save to chrome.storage.local for content script access
+      if (typeof chrome !== "undefined" && chrome.storage) {
+        chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_REGIONS]: regionsObj });
+      }
+
       return newMap;
     });
+  };
+
+  /**
+   * Set date range to today
+   */
+  const setToday = () => {
+    const now = new Date();
+
+    setStartYear(now.getFullYear());
+    setStartMonth(now.getMonth() + 1);
+    setStartDay(now.getDate());
+    setEndYear(now.getFullYear());
+    setEndMonth(now.getMonth() + 1);
+    setEndDay(now.getDate());
+
+    toast.success("Date set to today");
+  };
+
+  /**
+   * Set date range to yesterday
+   */
+  const setYesterday = () => {
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    setStartYear(yesterday.getFullYear());
+    setStartMonth(yesterday.getMonth() + 1);
+    setStartDay(yesterday.getDate());
+    setEndYear(yesterday.getFullYear());
+    setEndMonth(yesterday.getMonth() + 1);
+    setEndDay(yesterday.getDate());
+
+    toast.success("Date set to yesterday");
+  };
+
+  /**
+   * Set date range to last 7 days
+   */
+  const setLast7Days = () => {
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    setStartYear(sevenDaysAgo.getFullYear());
+    setStartMonth(sevenDaysAgo.getMonth() + 1);
+    setStartDay(sevenDaysAgo.getDate());
+    setEndYear(now.getFullYear());
+    setEndMonth(now.getMonth() + 1);
+    setEndDay(now.getDate());
+
+    toast.success("Date set to last 7 days");
+  };
+
+  /**
+   * Set date range to last 30 days
+   */
+  const setLast30Days = () => {
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    setStartYear(thirtyDaysAgo.getFullYear());
+    setStartMonth(thirtyDaysAgo.getMonth() + 1);
+    setStartDay(thirtyDaysAgo.getDate());
+    setEndYear(now.getFullYear());
+    setEndMonth(now.getMonth() + 1);
+    setEndDay(now.getDate());
+
+    toast.success("Date set to last 30 days");
   };
 
   /**
@@ -566,11 +749,7 @@ export default function URLReplacerPopup() {
 
     if (campaigns.length === 0) {
       console.error("No campaigns available");
-      return;
-    }
-
-    if (!baseUrl.trim()) {
-      console.error("No base URL provided");
+      toast.error("No campaigns available");
       return;
     }
 
@@ -580,10 +759,20 @@ export default function URLReplacerPopup() {
       // Get campaign at the specified index
       const campaign = campaigns[index];
 
-      // Replace campaign_id parameter in the base URL
-      const urlObj = new URL(baseUrl);
-      urlObj.searchParams.set("campaign_id", campaign.id);
-      const newUrl = urlObj.toString();
+      // Get the region for this campaign
+      const region = campaignRegions.get(campaign.id);
+      if (!region) {
+        toast.error("Please select a region for this campaign");
+        setIsLoading(false);
+        return;
+      }
+
+      // Calculate timestamps based on region
+      const startTimestamp = regionDateToTimestamp(region, startYear, startMonth, startDay);
+      const endTimestamp = regionDateToTimestamp(region, endYear, endMonth, endDay);
+
+      // Build the campaign URL
+      const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp);
 
       if (typeof chrome !== "undefined" && chrome.tabs) {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -674,7 +863,7 @@ export default function URLReplacerPopup() {
                   placeholder="CNT-CleansingOil-200ml_250512_PH_ProductGMV    1831881764572194&#10;CNT-DoubleCleansingDuo-None_250512_PH_ProductGMV    1831884518268977"
                   value={campaignDataText}
                   onChange={(e) => setCampaignDataText(e.target.value)}
-                  className="h-[200px] font-mono text-xs"
+                  className="h-fit font-mono text-xs"
                   disabled={isLoading}
                 />
                 <div className="text-xs text-muted-foreground">
@@ -682,40 +871,145 @@ export default function URLReplacerPopup() {
                 </div>
               </div>
 
-              {/* Base URL Input */}
-              <div className="space-y-2">
+              {/* Date Range Input */}
+              <div className="space-y-3 flex flex-col gap-2">
                 <div className="flex items-center justify-between">
-                  <label htmlFor="base-url" className="font-bold text-xl text-foreground">
-                    Base URL
+                  <label className="font-bold text-xl text-foreground">
+                    Date Range
                   </label>
-                  {baseUrl.trim() && lastSavedBaseUrl === baseUrl && hasRequiredDateParams && hasValidProductUrl && (
-                    <div className="flex items-center gap-1 text-xs text-green-600">
-                      <CheckCircle2 className="size-3" />
-                      <span>Saved</span>
-                    </div>
-                  )}
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={setToday}
+                      variant="outline"
+                      size="sm"
+                      disabled={isLoading}
+                      className="shadow-brutal-button rounded-none"
+                    >
+                      Today
+                    </Button>
+                    <Button
+                      onClick={setYesterday}
+                      variant="outline"
+                      size="sm"
+                      disabled={isLoading}
+                      className="shadow-brutal-button rounded-none"
+                    >
+                      Yesterday
+                    </Button>
+                    <Button
+                      onClick={setLast7Days}
+                      variant="outline"
+                      size="sm"
+                      disabled={isLoading}
+                      className="shadow-brutal-button rounded-none"
+                    >
+                      Last 7 days
+                    </Button>
+                    <Button
+                      onClick={setLast30Days}
+                      variant="outline"
+                      size="sm"
+                      disabled={isLoading}
+                      className="shadow-brutal-button rounded-none"
+                    >
+                      Last 30 days
+                    </Button>
+                  </div>
                 </div>
-                <Textarea
-                  id="base-url"
-                  placeholder="https://ads.tiktok.com/i18n/gmv-max/dashboard?aadvid=123&campaign_id=1831881764572194&campaign_start_date=2025-01-01&campaign_end_date=2025-01-31"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  className="h-[100px] font-mono text-xs"
-                  disabled={isLoading}
-                />
-                {baseUrl.trim() && (!hasRequiredDateParams || !hasValidProductUrl) && (
-                  <p className="text-sm text-destructive font-medium">
-                    {!hasValidProductUrl && (
-                      <>The URL must start with "https://ads.tiktok.com/i18n/gmv-max/dashboard/product".</>
-                    )}
-                    {hasValidProductUrl && !hasRequiredDateParams && (
-                      <>Please select the campaign start date and end date in the URL parameters. The URL must include both "campaign_start_date" and "campaign_end_date" parameters.</>
-                    )}
-                    {!hasValidProductUrl && !hasRequiredDateParams && (
-                      <><br />Additionally, the URL must include both "campaign_start_date" and "campaign_end_date" parameters.</>
-                    )}
-                  </p>
-                )}
+
+                <div className="flex gap-2 w-full justify-around">
+                  {/* Start Date */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-foreground">Start Date</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <input
+                          type="number"
+                          min="1"
+                          max="31"
+                          value={startDay}
+                          onChange={(e) => setStartDay(parseInt(e.target.value) || 1)}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          placeholder="Day"
+                          disabled={isLoading}
+                        />
+                        <p className="text-xs text-muted-foreground">Day</p>
+                      </div>
+                      <div className="space-y-1">
+                        <input
+                          type="number"
+                          min="1"
+                          max="12"
+                          value={startMonth}
+                          onChange={(e) => setStartMonth(parseInt(e.target.value) || 1)}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          placeholder="Month"
+                          disabled={isLoading}
+                        />
+                        <p className="text-xs text-muted-foreground">Month</p>
+                      </div>
+                      <div className="space-y-1">
+                        <input
+                          type="number"
+                          min="2020"
+                          max="2099"
+                          value={startYear}
+                          onChange={(e) => setStartYear(parseInt(e.target.value) || 2025)}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          placeholder="Year"
+                          disabled={isLoading}
+                        />
+                        <p className="text-xs text-muted-foreground">Year</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* End Date */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-foreground">End Date</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <input
+                          type="number"
+                          min="1"
+                          max="31"
+                          value={endDay}
+                          onChange={(e) => setEndDay(parseInt(e.target.value) || 1)}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          placeholder="Day"
+                          disabled={isLoading}
+                        />
+                        <p className="text-xs text-muted-foreground">Day</p>
+                      </div>
+                      <div className="space-y-1">
+                        <input
+                          type="number"
+                          min="1"
+                          max="12"
+                          value={endMonth}
+                          onChange={(e) => setEndMonth(parseInt(e.target.value) || 1)}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          placeholder="Month"
+                          disabled={isLoading}
+                        />
+                        <p className="text-xs text-muted-foreground">Month</p>
+                      </div>
+                      <div className="space-y-1">
+                        <input
+                          type="number"
+                          min="2020"
+                          max="2099"
+                          value={endYear}
+                          onChange={(e) => setEndYear(parseInt(e.target.value) || 2025)}
+                          className="w-full px-3 py-2 border rounded-md text-sm"
+                          placeholder="Year"
+                          disabled={isLoading}
+                        />
+                        <p className="text-xs text-muted-foreground">Year</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Auto-Click Toggle */}
@@ -824,20 +1118,20 @@ export default function URLReplacerPopup() {
 
                                   {/* Action Buttons */}
                                   <div className="flex items-center gap-2 flex-shrink-0">
-                                  {/* Workflow Status Indicator - only show loading or error */}
-                                  {uploadStatus && uploadStatus.status !== "success" && (
-                                    <div className="flex-shrink-0">
-                                      {uploadStatus.status === "started" && (
-                                        <Loader2 className="size-5 text-blue-500 animate-spin" />
-                                      )}
-                                      {uploadStatus.status === "error" && (
-                                        <XCircle className="size-5 text-red-500" />
-                                      )}
-                                    </div>
-                                  )}
+                                    {/* Workflow Status Indicator - only show loading or error */}
+                                    {uploadStatus && uploadStatus.status !== "success" && (
+                                      <div className="flex-shrink-0">
+                                        {uploadStatus.status === "started" && (
+                                          <Loader2 className="size-5 text-blue-500 animate-spin" />
+                                        )}
+                                        {uploadStatus.status === "error" && (
+                                          <XCircle className="size-5 text-red-500" />
+                                        )}
+                                      </div>
+                                    )}
 
-                                  {/* Cat Icon Button - Trigger download->upload workflow */}
-                                  {/* <Button
+                                    {/* Cat Icon Button - Trigger download->upload workflow */}
+                                    {/* <Button
                                     onClick={(e) => triggerWorkflow(index, e)}
                                     disabled={!baseUrl.trim() || isLoading}
                                     variant="outline"
@@ -848,42 +1142,41 @@ export default function URLReplacerPopup() {
                                     <CatIcon className="size-4" />
                                   </Button> */}
 
-                                  {/* Google Drive Icon Button - Open Google Drive folder */}
-                                  <Button
-                                    onClick={(e) => navigateToGoogleDrive(index, e)}
-                                    disabled={isLoading}
-                                    variant="outline"
-                                    size="sm"
-                                    className="shadow-brutal-button rounded-none h-8 w-8 p-0"
-                                    title="Open Google Drive folder"
-                                  >
-                                    <FolderOpen className="size-4" />
-                                  </Button>
-                                </div>
-                              </div>
-
-                              {/* Bottom Row: Region Selection Buttons */}
-                              <div className="flex items-center gap-2">
-                                {(["PH", "US", "ID", "MY"] as const).map((region) => {
-                                  const isSelected = campaignRegions.get(campaign.id) === region;
-                                  const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
-                                  return (
+                                    {/* Google Drive Icon Button - Open Google Drive folder */}
                                     <Button
-                                      key={region}
-                                      onClick={() => !isCompleted && handleRegionSelect(campaign.id, region)}
+                                      onClick={(e) => navigateToGoogleDrive(index, e)}
+                                      disabled={isLoading}
                                       variant="outline"
                                       size="sm"
-                                      disabled={isCompleted}
-                                      className={`flex-1 h-7 max-w-[50px] text-xs shadow-brutal-button rounded-none transition-colors ${
-                                        isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
-                                      } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
+                                      className="shadow-brutal-button rounded-none h-8 w-8 p-0"
+                                      title="Open Google Drive folder"
                                     >
-                                      {region}
+                                      <FolderOpen className="size-4" />
                                     </Button>
-                                  );
-                                })}
+                                  </div>
+                                </div>
+
+                                {/* Bottom Row: Region Selection Buttons */}
+                                <div className="flex items-center gap-2">
+                                  {(["PH", "US", "ID", "MY"] as const).map((region) => {
+                                    const isSelected = campaignRegions.get(campaign.id) === region;
+                                    const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
+                                    return (
+                                      <Button
+                                        key={region}
+                                        onClick={() => !isCompleted && handleRegionSelect(campaign.id, region)}
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={isCompleted}
+                                        className={`flex-1 h-7 max-w-[50px] text-xs shadow-brutal-button rounded-none transition-colors ${isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
+                                          } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
+                                      >
+                                        {region}
+                                      </Button>
+                                    );
+                                  })}
+                                </div>
                               </div>
-                            </div>
                             </div>
                           );
                         })}
@@ -944,7 +1237,7 @@ export default function URLReplacerPopup() {
                                       {/* Cat Icon Button - Trigger download->upload workflow */}
                                       <Button
                                         onClick={(e) => triggerWorkflow(index, e)}
-                                        disabled={!baseUrl.trim() || isLoading}
+                                        disabled={!campaignRegions.get(campaign.id) || isLoading}
                                         variant="outline"
                                         size="sm"
                                         className="shadow-brutal-button rounded-none h-8 w-8 p-0"
@@ -979,9 +1272,8 @@ export default function URLReplacerPopup() {
                                           variant="outline"
                                           size="sm"
                                           disabled={isCompleted}
-                                          className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${
-                                            isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
-                                          } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
+                                          className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
+                                            } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
                                         >
                                           {region}
                                         </Button>

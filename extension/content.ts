@@ -18,6 +18,77 @@ let uploadInProgress = false;
 // Auto-navigation control - load from localStorage, default state is paused
 let isAutoNavigationPaused = true;
 
+// Region configuration with aadvid, oec_seller_id, and bc_id
+const REGION_CONFIG = {
+  US: {
+    aadvid: "6860053951073484806",
+    oec_seller_id: "7495275617887947202",
+    bc_id: "7278556643061792769",
+    utcOffset: 9, // UTC+09:00
+  },
+  ID: {
+    aadvid: "7208105767293992962",
+    oec_seller_id: "7494928748302076708",
+    bc_id: "7208106862128939009",
+    utcOffset: 7, // UTC+07:00
+  },
+  PH: {
+    aadvid: "7265198676149075969",
+    oec_seller_id: "7495168184921196786",
+    bc_id: "7265198572054888449",
+    utcOffset: 8, // UTC+08:00
+  },
+  MY: {
+    aadvid: "7525257295555772423",
+    oec_seller_id: "7496261644146150198",
+    bc_id: "7525256178398674952",
+    utcOffset: 8, // UTC+08:00
+  },
+} as const;
+
+const BASE_URL = "https://ads.tiktok.com/i18n/gmv-max/dashboard/product";
+
+/**
+ * Convert region-specific date to timestamp
+ */
+function regionDateToTimestamp(
+  region: "US" | "ID" | "MY" | "PH",
+  year: number,
+  month: number,
+  day: number,
+  hour: number = 0,
+  minute: number = 0,
+  second: number = 0
+): number {
+  const offset = REGION_CONFIG[region].utcOffset;
+  const utcDate = new Date(Date.UTC(year, month - 1, day, hour - offset, minute, second));
+  return utcDate.getTime();
+}
+
+/**
+ * Build campaign URL with region-specific parameters
+ */
+function buildCampaignUrl(
+  region: "US" | "ID" | "MY" | "PH",
+  campaignId: string,
+  startTimestamp: number,
+  endTimestamp: number
+): string {
+  const config = REGION_CONFIG[region];
+  const params = new URLSearchParams({
+    aadvid: config.aadvid,
+    oec_seller_id: config.oec_seller_id,
+    bc_id: config.bc_id,
+    type: "product",
+    campaign_id: campaignId,
+    list_status: "delivery_ok",
+    campaign_start_date: startTimestamp.toString(),
+    campaign_end_date: endTimestamp.toString(),
+  });
+
+  return `${BASE_URL}?${params.toString()}`;
+}
+
 
 
 /**
@@ -217,23 +288,25 @@ async function goToPrevCampaign(): Promise<void> {
   try {
     const result = await chrome.storage.local.get([
       "gmv_max_campaign_data",
-      "gmv_max_base_url",
       "gmv_max_current_index",
       "gmv_max_upload_success_status",
+      "gmv_max_campaign_regions",
+      "gmv_max_date_range",
     ]);
 
     const campaigns = result.gmv_max_campaign_data || [];
-    const baseUrl = result.gmv_max_base_url;
     const currentIndex = parseInt(result.gmv_max_current_index || "0", 10);
     const uploadSuccessStatus = result.gmv_max_upload_success_status || {};
+    const campaignRegions = result.gmv_max_campaign_regions || {};
+    const dateRange = result.gmv_max_date_range;
 
     if (campaigns.length === 0) {
       alert("No campaigns available");
       return;
     }
 
-    if (!baseUrl) {
-      alert("No base URL configured. Please configure it in the extension popup.");
+    if (!dateRange) {
+      alert("Date range not configured. Please set date range in extension popup.");
       return;
     }
 
@@ -273,11 +346,31 @@ async function goToPrevCampaign(): Promise<void> {
       return;
     }
 
-    // Navigate to previous campaign
+    // Navigate to previous campaign with proper URL building
     const campaign = campaigns[prevIndex];
-    const urlObj = new URL(baseUrl);
-    urlObj.searchParams.set("campaign_id", campaign.id);
-    const newUrl = urlObj.toString();
+    const region = campaignRegions[campaign.id];
+
+    if (!region) {
+      alert(`Please select a region for campaign: ${campaign.name}`);
+      return;
+    }
+
+    // Calculate timestamps based on region
+    const startTimestamp = regionDateToTimestamp(
+      region,
+      dateRange.startYear,
+      dateRange.startMonth,
+      dateRange.startDay
+    );
+    const endTimestamp = regionDateToTimestamp(
+      region,
+      dateRange.endYear,
+      dateRange.endMonth,
+      dateRange.endDay
+    );
+
+    // Build the campaign URL
+    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp);
 
     // Update current index
     await chrome.storage.local.set({ gmv_max_current_index: prevIndex.toString() });
@@ -297,21 +390,23 @@ async function goToFirstCampaign(): Promise<void> {
   try {
     const result = await chrome.storage.local.get([
       "gmv_max_campaign_data",
-      "gmv_max_base_url",
       "gmv_max_upload_success_status",
+      "gmv_max_campaign_regions",
+      "gmv_max_date_range",
     ]);
 
     const campaigns = result.gmv_max_campaign_data || [];
-    const baseUrl = result.gmv_max_base_url;
     const uploadSuccessStatus = result.gmv_max_upload_success_status || {};
+    const campaignRegions = result.gmv_max_campaign_regions || {};
+    const dateRange = result.gmv_max_date_range;
 
     if (campaigns.length === 0) {
       alert("No campaigns available");
       return;
     }
 
-    if (!baseUrl) {
-      alert("No base URL configured. Please configure it in the extension popup.");
+    if (!dateRange) {
+      alert("Date range not configured. Please set date range in extension popup.");
       return;
     }
 
@@ -333,11 +428,31 @@ async function goToFirstCampaign(): Promise<void> {
       return;
     }
 
-    // Navigate to first uncompleted campaign
+    // Navigate to first uncompleted campaign with proper URL building
     const campaign = campaigns[firstIndex];
-    const urlObj = new URL(baseUrl);
-    urlObj.searchParams.set("campaign_id", campaign.id);
-    const newUrl = urlObj.toString();
+    const region = campaignRegions[campaign.id];
+
+    if (!region) {
+      alert(`Please select a region for campaign: ${campaign.name}`);
+      return;
+    }
+
+    // Calculate timestamps based on region
+    const startTimestamp = regionDateToTimestamp(
+      region,
+      dateRange.startYear,
+      dateRange.startMonth,
+      dateRange.startDay
+    );
+    const endTimestamp = regionDateToTimestamp(
+      region,
+      dateRange.endYear,
+      dateRange.endMonth,
+      dateRange.endDay
+    );
+
+    // Build the campaign URL
+    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp);
 
     // Update current index
     await chrome.storage.local.set({ gmv_max_current_index: firstIndex.toString() });
@@ -357,23 +472,25 @@ async function goToNextCampaign(): Promise<void> {
   try {
     const result = await chrome.storage.local.get([
       "gmv_max_campaign_data",
-      "gmv_max_base_url",
       "gmv_max_current_index",
       "gmv_max_upload_success_status",
+      "gmv_max_campaign_regions",
+      "gmv_max_date_range",
     ]);
 
     const campaigns = result.gmv_max_campaign_data || [];
-    const baseUrl = result.gmv_max_base_url;
     const currentIndex = parseInt(result.gmv_max_current_index || "0", 10);
     const uploadSuccessStatus = result.gmv_max_upload_success_status || {};
+    const campaignRegions = result.gmv_max_campaign_regions || {};
+    const dateRange = result.gmv_max_date_range;
 
     if (campaigns.length === 0) {
       alert("No campaigns available");
       return;
     }
 
-    if (!baseUrl) {
-      alert("No base URL configured. Please configure it in the extension popup.");
+    if (!dateRange) {
+      alert("Date range not configured. Please set date range in extension popup.");
       return;
     }
 
@@ -413,11 +530,31 @@ async function goToNextCampaign(): Promise<void> {
       return;
     }
 
-    // Navigate to next campaign
+    // Navigate to next campaign with proper URL building
     const campaign = campaigns[nextIndex];
-    const urlObj = new URL(baseUrl);
-    urlObj.searchParams.set("campaign_id", campaign.id);
-    const newUrl = urlObj.toString();
+    const region = campaignRegions[campaign.id];
+
+    if (!region) {
+      alert(`Please select a region for campaign: ${campaign.name}`);
+      return;
+    }
+
+    // Calculate timestamps based on region
+    const startTimestamp = regionDateToTimestamp(
+      region,
+      dateRange.startYear,
+      dateRange.startMonth,
+      dateRange.startDay
+    );
+    const endTimestamp = regionDateToTimestamp(
+      region,
+      dateRange.endYear,
+      dateRange.endMonth,
+      dateRange.endDay
+    );
+
+    // Build the campaign URL
+    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp);
 
     // Update current index
     await chrome.storage.local.set({ gmv_max_current_index: nextIndex.toString() });
@@ -788,16 +925,14 @@ async function updateControlButtons(): Promise<void> {
   const resumeButton = document.getElementById("gmv-max-resume-btn") as HTMLButtonElement | null;
 
   if (stopButton && resumeButton) {
-    // Check if campaigns are configured
+    // Check if campaigns are configured (only need campaign data now)
     const result = await chrome.storage.local.get([
       "gmv_max_campaign_data",
-      "gmv_max_base_url",
       "gmv_max_upload_success_status",
     ]);
     const campaigns = result.gmv_max_campaign_data || [];
-    const baseUrl = result.gmv_max_base_url;
     const successStatuses: Record<string, { status: string }> = result.gmv_max_upload_success_status || {};
-    const isConfigured = campaigns.length > 0 && baseUrl;
+    const isConfigured = campaigns.length > 0;
 
     // Check if progress is full (all campaigns uploaded)
     const total = campaigns.length;
@@ -841,11 +976,10 @@ async function updateNavigationButtons(): Promise<void> {
   const nextButton = document.getElementById("gmv-max-next-campaign-btn") as HTMLButtonElement | null;
 
   if (prevButton && nextButton) {
-    // Check if campaigns are configured
-    const result = await chrome.storage.local.get(["gmv_max_campaign_data", "gmv_max_base_url"]);
+    // Check if campaigns are configured (only need campaign data now)
+    const result = await chrome.storage.local.get(["gmv_max_campaign_data"]);
     const campaigns = result.gmv_max_campaign_data || [];
-    const baseUrl = result.gmv_max_base_url;
-    const isConfigured = campaigns.length > 0 && baseUrl;
+    const isConfigured = campaigns.length > 0;
 
     // Disable buttons if not configured
     const shouldDisable = !isConfigured;
@@ -1010,11 +1144,10 @@ async function injectNavigationButtons(): Promise<void> {
     return;
   }
 
-  // Check if campaigns are configured
-  const result = await chrome.storage.local.get(["gmv_max_campaign_data", "gmv_max_base_url"]);
+  // Check if campaigns are configured (only need campaign data now)
+  const result = await chrome.storage.local.get(["gmv_max_campaign_data"]);
   const campaigns = result.gmv_max_campaign_data || [];
-  const baseUrl = result.gmv_max_base_url;
-  const isConfigured = campaigns.length > 0 && baseUrl;
+  const isConfigured = campaigns.length > 0;
 
   // Create container for buttons
   const container = document.createElement("div");
@@ -1229,8 +1362,8 @@ chrome.runtime.onMessage.addListener((message) => {
  */
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local") {
-    // Check if campaign data or base URL changed
-    if (changes["gmv_max_campaign_data"] || changes["gmv_max_base_url"]) {
+    // Check if campaign data changed
+    if (changes["gmv_max_campaign_data"]) {
       console.log("[GMV Max Navigator] Configuration changed, updating button states");
 
       // Update all buttons that depend on configuration
