@@ -21,6 +21,10 @@
 /build
 /dist
 
+# extension packaging
+gmv-max-automation-bot-v*.zip
+gmv-max-automation-bot-v*/
+
 # misc
 .DS_Store
 *.pem

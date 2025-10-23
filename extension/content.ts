@@ -4,6 +4,11 @@
  * Also detects downloaded files and triggers upload to Google Drive
  */
 
+import { STORAGE_KEYS } from "./constants/storage";
+import { regionDateToTimestamp } from "./utils/date-utils";
+import { buildCampaignUrl } from "./utils/url-builder";
+import type { CampaignType } from "./types/campaign";
+
 const STORAGE_KEY = "gmv_max_auto_click_enabled";
 const WORKFLOW_PAUSED_KEY = "gmv_max_workflow_paused";
 const MAX_RETRY_ATTEMPTS = 10;
@@ -17,77 +22,6 @@ let uploadInProgress = false;
 
 // Auto-navigation control - load from localStorage, default state is paused
 let isAutoNavigationPaused = true;
-
-// Region configuration with aadvid, oec_seller_id, and bc_id
-const REGION_CONFIG = {
-  US: {
-    aadvid: "6860053951073484806",
-    oec_seller_id: "7495275617887947202",
-    bc_id: "7278556643061792769",
-    utcOffset: 9, // UTC+09:00
-  },
-  ID: {
-    aadvid: "7208105767293992962",
-    oec_seller_id: "7494928748302076708",
-    bc_id: "7208106862128939009",
-    utcOffset: 7, // UTC+07:00
-  },
-  PH: {
-    aadvid: "7265198676149075969",
-    oec_seller_id: "7495168184921196786",
-    bc_id: "7265198572054888449",
-    utcOffset: 8, // UTC+08:00
-  },
-  MY: {
-    aadvid: "7525257295555772423",
-    oec_seller_id: "7496261644146150198",
-    bc_id: "7525256178398674952",
-    utcOffset: 8, // UTC+08:00
-  },
-} as const;
-
-const BASE_URL = "https://ads.tiktok.com/i18n/gmv-max/dashboard/product";
-
-/**
- * Convert region-specific date to timestamp
- */
-function regionDateToTimestamp(
-  region: "US" | "ID" | "MY" | "PH",
-  year: number,
-  month: number,
-  day: number,
-  hour: number = 0,
-  minute: number = 0,
-  second: number = 0
-): number {
-  const offset = REGION_CONFIG[region].utcOffset;
-  const utcDate = new Date(Date.UTC(year, month - 1, day, hour - offset, minute, second));
-  return utcDate.getTime();
-}
-
-/**
- * Build campaign URL with region-specific parameters
- */
-function buildCampaignUrl(
-  region: "US" | "ID" | "MY" | "PH",
-  campaignId: string,
-  startTimestamp: number,
-  endTimestamp: number
-): string {
-  const config = REGION_CONFIG[region];
-  const params = new URLSearchParams({
-    aadvid: config.aadvid,
-    oec_seller_id: config.oec_seller_id,
-    bc_id: config.bc_id,
-    type: "product",
-    campaign_id: campaignId,
-    list_status: "delivery_ok",
-    campaign_start_date: startTimestamp.toString(),
-    campaign_end_date: endTimestamp.toString(),
-  });
-
-  return `${BASE_URL}?${params.toString()}`;
-}
 
 
 
@@ -287,18 +221,20 @@ function attemptAutoClick(attempt: number = 1) {
 async function goToPrevCampaign(): Promise<void> {
   try {
     const result = await chrome.storage.local.get([
-      "gmv_max_campaign_data",
-      "gmv_max_current_index",
-      "gmv_max_upload_success_status",
-      "gmv_max_campaign_regions",
-      "gmv_max_date_range",
+      STORAGE_KEYS.CAMPAIGN_DATA,
+      STORAGE_KEYS.CURRENT_INDEX,
+      STORAGE_KEYS.UPLOAD_SUCCESS_STATUS,
+      STORAGE_KEYS.CAMPAIGN_REGIONS,
+      STORAGE_KEYS.CAMPAIGN_TYPES,
+      STORAGE_KEYS.DATE_RANGE,
     ]);
 
-    const campaigns = result.gmv_max_campaign_data || [];
-    const currentIndex = parseInt(result.gmv_max_current_index || "0", 10);
-    const uploadSuccessStatus = result.gmv_max_upload_success_status || {};
-    const campaignRegions = result.gmv_max_campaign_regions || {};
-    const dateRange = result.gmv_max_date_range;
+    const campaigns = result[STORAGE_KEYS.CAMPAIGN_DATA] || [];
+    const currentIndex = parseInt(result[STORAGE_KEYS.CURRENT_INDEX] || "0", 10);
+    const uploadSuccessStatus = result[STORAGE_KEYS.UPLOAD_SUCCESS_STATUS] || {};
+    const campaignRegions = result[STORAGE_KEYS.CAMPAIGN_REGIONS] || {};
+    const campaignTypes = result[STORAGE_KEYS.CAMPAIGN_TYPES] || {};
+    const dateRange = result[STORAGE_KEYS.DATE_RANGE];
 
     if (campaigns.length === 0) {
       alert("No campaigns available");
@@ -369,11 +305,14 @@ async function goToPrevCampaign(): Promise<void> {
       dateRange.endDay
     );
 
+    // Get campaign type (default to PRODUCT if not set)
+    const campaignType: CampaignType = campaignTypes[campaign.id] || "PRODUCT";
+
     // Build the campaign URL
-    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp);
+    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp, campaignType);
 
     // Update current index
-    await chrome.storage.local.set({ gmv_max_current_index: prevIndex.toString() });
+    await chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: prevIndex.toString() });
 
     console.log(`[GMV Max Navigator] Navigating to previous campaign: ${campaign.name}`);
     window.location.href = newUrl;
@@ -389,16 +328,18 @@ async function goToPrevCampaign(): Promise<void> {
 async function goToFirstCampaign(): Promise<void> {
   try {
     const result = await chrome.storage.local.get([
-      "gmv_max_campaign_data",
-      "gmv_max_upload_success_status",
-      "gmv_max_campaign_regions",
-      "gmv_max_date_range",
+      STORAGE_KEYS.CAMPAIGN_DATA,
+      STORAGE_KEYS.UPLOAD_SUCCESS_STATUS,
+      STORAGE_KEYS.CAMPAIGN_REGIONS,
+      STORAGE_KEYS.CAMPAIGN_TYPES,
+      STORAGE_KEYS.DATE_RANGE,
     ]);
 
-    const campaigns = result.gmv_max_campaign_data || [];
-    const uploadSuccessStatus = result.gmv_max_upload_success_status || {};
-    const campaignRegions = result.gmv_max_campaign_regions || {};
-    const dateRange = result.gmv_max_date_range;
+    const campaigns = result[STORAGE_KEYS.CAMPAIGN_DATA] || [];
+    const uploadSuccessStatus = result[STORAGE_KEYS.UPLOAD_SUCCESS_STATUS] || {};
+    const campaignRegions = result[STORAGE_KEYS.CAMPAIGN_REGIONS] || {};
+    const campaignTypes = result[STORAGE_KEYS.CAMPAIGN_TYPES] || {};
+    const dateRange = result[STORAGE_KEYS.DATE_RANGE];
 
     if (campaigns.length === 0) {
       alert("No campaigns available");
@@ -451,11 +392,14 @@ async function goToFirstCampaign(): Promise<void> {
       dateRange.endDay
     );
 
+    // Get campaign type (default to PRODUCT if not set)
+    const campaignType: CampaignType = campaignTypes[campaign.id] || "PRODUCT";
+
     // Build the campaign URL
-    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp);
+    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp, campaignType);
 
     // Update current index
-    await chrome.storage.local.set({ gmv_max_current_index: firstIndex.toString() });
+    await chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: firstIndex.toString() });
 
     console.log(`[GMV Max Navigator] Navigating to first campaign: ${campaign.name}`);
     window.location.href = newUrl;
@@ -471,18 +415,20 @@ async function goToFirstCampaign(): Promise<void> {
 async function goToNextCampaign(): Promise<void> {
   try {
     const result = await chrome.storage.local.get([
-      "gmv_max_campaign_data",
-      "gmv_max_current_index",
-      "gmv_max_upload_success_status",
-      "gmv_max_campaign_regions",
-      "gmv_max_date_range",
+      STORAGE_KEYS.CAMPAIGN_DATA,
+      STORAGE_KEYS.CURRENT_INDEX,
+      STORAGE_KEYS.UPLOAD_SUCCESS_STATUS,
+      STORAGE_KEYS.CAMPAIGN_REGIONS,
+      STORAGE_KEYS.CAMPAIGN_TYPES,
+      STORAGE_KEYS.DATE_RANGE,
     ]);
 
-    const campaigns = result.gmv_max_campaign_data || [];
-    const currentIndex = parseInt(result.gmv_max_current_index || "0", 10);
-    const uploadSuccessStatus = result.gmv_max_upload_success_status || {};
-    const campaignRegions = result.gmv_max_campaign_regions || {};
-    const dateRange = result.gmv_max_date_range;
+    const campaigns = result[STORAGE_KEYS.CAMPAIGN_DATA] || [];
+    const currentIndex = parseInt(result[STORAGE_KEYS.CURRENT_INDEX] || "0", 10);
+    const uploadSuccessStatus = result[STORAGE_KEYS.UPLOAD_SUCCESS_STATUS] || {};
+    const campaignRegions = result[STORAGE_KEYS.CAMPAIGN_REGIONS] || {};
+    const campaignTypes = result[STORAGE_KEYS.CAMPAIGN_TYPES] || {};
+    const dateRange = result[STORAGE_KEYS.DATE_RANGE];
 
     if (campaigns.length === 0) {
       alert("No campaigns available");
@@ -553,11 +499,14 @@ async function goToNextCampaign(): Promise<void> {
       dateRange.endDay
     );
 
+    // Get campaign type (default to PRODUCT if not set)
+    const campaignType: CampaignType = campaignTypes[campaign.id] || "PRODUCT";
+
     // Build the campaign URL
-    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp);
+    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp, campaignType);
 
     // Update current index
-    await chrome.storage.local.set({ gmv_max_current_index: nextIndex.toString() });
+    await chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: nextIndex.toString() });
 
     console.log(`[GMV Max Navigator] Navigating to next campaign: ${campaign.name}`);
     window.location.href = newUrl;
