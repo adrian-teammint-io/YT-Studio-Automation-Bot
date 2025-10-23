@@ -219,13 +219,14 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string):
   }
 
   // Wait a bit for the download to complete
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  // Increased delay to ensure file is fully downloaded before checking
+  await new Promise((resolve) => setTimeout(resolve, 3000));
 
   return new Promise((resolve, reject) => {
     chrome.downloads.search(
       {
         orderBy: ["-startTime"],
-        limit: 5, // Check last 5 downloads to be safe
+        limit: 10, // Check last 10 downloads to handle multiple campaigns
       },
       async (downloads) => {
         if (chrome.runtime.lastError) {
@@ -240,18 +241,22 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string):
           return;
         }
 
-        // Find the most recent .xlsx file
+        // Find the most recent .xlsx file that matches the campaign ID
+        // File format: "Product data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}"
         const xlsxDownload = downloads.find(
-          (d) => d.filename.endsWith(".xlsx") && d.state === "complete"
+          (d) => d.filename.endsWith(".xlsx") &&
+                 d.state === "complete" &&
+                 d.filename.includes(`Campaign ${campaignId}`)
         );
 
         if (!xlsxDownload) {
-          console.warn("[Background] No completed Excel file found in recent downloads");
-          reject(new Error("No Excel file found"));
+          console.warn("[Background] No completed Excel file found for campaign ID:", campaignId);
+          console.warn("[Background] Available downloads:", downloads.map(d => d.filename));
+          reject(new Error(`No Excel file found for campaign ${campaignId}`));
           return;
         }
 
-        console.log("[Background] Found Excel download:", xlsxDownload);
+        console.log("[Background] Found Excel download for campaign:", xlsxDownload);
 
         // Extract filename from path
         const fileName = xlsxDownload.filename.split(/[/\\]/).pop() || "report.xlsx";

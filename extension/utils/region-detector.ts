@@ -28,22 +28,30 @@ export const REGION_MAPPINGS: RegionMapping[] = [
   {
     region: "2.WEST_US",
     folderId: "1kyao3_UQjYFuzjKDGmf66QpDsYn9dM_p", // 2.WEST_US (Shared Drive)
-    pattern: /_US_/i, // Match campaigns containing "_US_" (case-insensitive)
+    // Match US in various formats: _US_, US(, US_, USspace, or US at end
+    // Examples: "campaign_US_data", "SKIN1004US(1st)", "campaignUS_official"
+    pattern: /(?:_US_|US(?=[_\(\s]|$))/i,
   },
   {
     region: "1.EAST_PH",
     folderId: "1nX2nVy-Oa2r9o-tke9EIci-Za7iCxl48", // 1.EAST_PH (Shared Drive)
-    pattern: /_PH_/i, // Match campaigns containing "_PH_" (case-insensitive)
+    // Match PH in various formats: _PH_, PH(, PH_, PHspace, or PH at end
+    // Examples: "campaign_PH_data", "SKIN1004PH(1st)", "campaignPH_official"
+    pattern: /(?:_PH_|PH(?=[_\(\s]|$))/i,
   },
   {
     region: "1.EAST_MY",
     folderId: "1QPXQu2xHKi441YE_UhpXU_t37UJSA2cv", // 1.EAST_MY (Shared Drive)
-    pattern: /_MY_/i, // Match campaigns containing "_MY_" (case-insensitive)
+    // Match MY in various formats: _MY_, MY(, MY_, MYspace, or MY at end
+    // Examples: "campaign_MY_data", "SKIN1004MY(1st)", "skin1004my_official"
+    pattern: /(?:_MY_|MY(?=[_\(\s]|$))/i,
   },
   {
     region: "1.EAST_ID",
     folderId: "1NGFgCLmFu1If39D8XQnolOV5t1zPVrRm", // 1.EAST_ID (Shared Drive)
-    pattern: /_ID_/i, // Match campaigns containing "_ID_" (case-insensitive)
+    // Match ID in various formats: _ID_, ID(, ID_, IDspace, or ID at end
+    // Examples: "campaign_ID_data", "SKIN1004ID(1st)", "campaignID_official"
+    pattern: /(?:_ID_|ID(?=[_\(\s]|$))/i,
   },
 ];
 

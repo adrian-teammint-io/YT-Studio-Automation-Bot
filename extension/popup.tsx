@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { POPUP_WIDTH } from "./constants/ui";
-import { ChevronLeft, Settings, Trash2, Loader2, CheckCircle2, XCircle, Cat, FolderOpen, CatIcon } from "lucide-react";
+import { ChevronLeft, Settings, Trash2, Loader2, CheckCircle2, XCircle, Cat, FolderOpen, CatIcon, BadgeCheckIcon, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
@@ -26,7 +26,14 @@ interface Campaign {
   name: string;
   id: string;
   region?: "PH" | "US" | "ID" | "MY";
+  type?: "PRODUCT" | "LIVE";
 }
+
+// LIVE campaigns that should use the live dashboard URL
+const LIVE_CAMPAIGNS = [
+  { name: "SKIN1004MY(1st)", id: "1842021739590817" },
+  { name: "skin1004my_official_250909", id: "1842771753445410" }
+];
 
 interface UploadStatus {
   status: "started" | "success" | "error";
@@ -43,6 +50,7 @@ const STORAGE_KEYS = {
   LAST_UPLOAD_STATUS: "lastUploadStatus",
   UPLOAD_SUCCESS_STATUS: "gmv_max_upload_success_status", // Persistent upload success tracking
   CAMPAIGN_REGIONS: "gmv_max_campaign_regions", // Store region selections per campaign
+  CAMPAIGN_TYPES: "gmv_max_campaign_types", // Store campaign type selections per campaign
   DATE_RANGE: "gmv_max_date_range", // Store start/end date values
 };
 
@@ -110,27 +118,37 @@ function regionDateToTimestamp(
  * @param campaignId - Campaign ID
  * @param startTimestamp - Start date timestamp
  * @param endTimestamp - End date timestamp
+ * @param campaignType - Campaign type (PRODUCT or LIVE)
  * @returns Complete campaign URL
  */
 function buildCampaignUrl(
   region: "US" | "ID" | "MY" | "PH",
   campaignId: string,
   startTimestamp: number,
-  endTimestamp: number
+  endTimestamp: number,
+  campaignType: "PRODUCT" | "LIVE" = "PRODUCT"
 ): string {
   const config = REGION_CONFIG[region];
+  const baseUrl = campaignType === "LIVE"
+    ? "https://ads.tiktok.com/i18n/gmv-max/dashboard/live"
+    : BASE_URL;
+
   const params = new URLSearchParams({
     aadvid: config.aadvid,
     oec_seller_id: config.oec_seller_id,
     bc_id: config.bc_id,
-    type: "product",
+    type: campaignType.toLowerCase(),
     campaign_id: campaignId,
-    list_status: "delivery_ok",
     campaign_start_date: startTimestamp.toString(),
     campaign_end_date: endTimestamp.toString(),
   });
 
-  return `${BASE_URL}?${params.toString()}`;
+  // Only add list_status for PRODUCT campaigns
+  if (campaignType === "PRODUCT") {
+    params.set("list_status", "delivery_ok");
+  }
+
+  return `${baseUrl}?${params.toString()}`;
 }
 
 export default function URLReplacerPopup() {
@@ -145,6 +163,13 @@ export default function URLReplacerPopup() {
   const activeToastsRef = React.useRef<Map<string, string | number>>(new Map());
   const [lastSavedCampaignData, setLastSavedCampaignData] = React.useState("");
   const [campaignRegions, setCampaignRegions] = React.useState<Map<string, "PH" | "US" | "ID" | "MY">>(new Map());
+  const [campaignTypes, setCampaignTypes] = React.useState<Map<string, "PRODUCT" | "LIVE">>(new Map());
+
+  // Version from manifest
+  const [version, setVersion] = React.useState<string>("");
+
+  // Refetch state
+  const [isRefetching, setIsRefetching] = React.useState(false);
 
   // Date range state
   const [startYear, setStartYear] = React.useState(new Date().getFullYear());
@@ -154,6 +179,13 @@ export default function URLReplacerPopup() {
   const [endMonth, setEndMonth] = React.useState(new Date().getMonth() + 1);
   const [endDay, setEndDay] = React.useState(new Date().getDate());
 
+  // Load version from manifest on mount
+  React.useEffect(() => {
+    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
+      const manifest = chrome.runtime.getManifest();
+      setVersion(manifest.version);
+    }
+  }, []);
 
   // Load stored data on mount
   React.useEffect(() => {
@@ -252,6 +284,41 @@ export default function URLReplacerPopup() {
             regionsMap.set(campaignId, region as "PH" | "US" | "ID" | "MY");
           });
           setCampaignRegions(regionsMap);
+
+          // Load campaign types from localStorage
+          const storedTypes = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_TYPES);
+          const existingTypes = storedTypes ? JSON.parse(storedTypes) : {};
+          let hasNewTypes = false;
+
+          data.forEach((campaign: Campaign) => {
+            // Check if this campaign is in the LIVE_CAMPAIGNS array
+            const isLiveCampaign = LIVE_CAMPAIGNS.some(
+              lc => lc.name === campaign.name && lc.id === campaign.id
+            );
+
+            // Only set default if not already set by user
+            if (!existingTypes[campaign.id]) {
+              existingTypes[campaign.id] = isLiveCampaign ? "LIVE" : "PRODUCT";
+              hasNewTypes = true;
+            }
+          });
+
+          // Save updated types if we added new defaults
+          if (hasNewTypes) {
+            localStorage.setItem(STORAGE_KEYS.CAMPAIGN_TYPES, JSON.stringify(existingTypes));
+          }
+
+          // Always sync all types to chrome.storage.local (for content script access)
+          if (typeof chrome !== "undefined" && chrome.storage && Object.keys(existingTypes).length > 0) {
+            chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_TYPES]: existingTypes });
+          }
+
+          // Set state with all types (existing + new defaults)
+          const typesMap = new Map<string, "PRODUCT" | "LIVE">();
+          Object.entries(existingTypes).forEach(([campaignId, type]) => {
+            typesMap.set(campaignId, type as "PRODUCT" | "LIVE");
+          });
+          setCampaignTypes(typesMap);
         }
 
         if (storedIndex) {
@@ -505,6 +572,38 @@ export default function URLReplacerPopup() {
       });
       setCampaignRegions(regionsMap);
 
+      // Auto-populate campaign type defaults for new campaigns
+      const storedTypes = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_TYPES);
+      const existingTypes = storedTypes ? JSON.parse(storedTypes) : {};
+      let hasNewTypes = false;
+
+      parsedCampaigns.forEach((campaign) => {
+        // Check if this campaign is in the LIVE_CAMPAIGNS array
+        const isLiveCampaign = LIVE_CAMPAIGNS.some(
+          lc => lc.name === campaign.name && lc.id === campaign.id
+        );
+
+        // Only set default if not already set by user
+        if (!existingTypes[campaign.id]) {
+          existingTypes[campaign.id] = isLiveCampaign ? "LIVE" : "PRODUCT";
+          hasNewTypes = true;
+        }
+      });
+
+      // Save updated types if we added new defaults
+      if (hasNewTypes) {
+        localStorage.setItem(STORAGE_KEYS.CAMPAIGN_TYPES, JSON.stringify(existingTypes));
+        // Also save to chrome.storage.local for content script access
+        chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_TYPES]: existingTypes });
+      }
+
+      // Update state with all types (existing + new defaults)
+      const typesMap = new Map<string, "PRODUCT" | "LIVE">();
+      Object.entries(existingTypes).forEach(([campaignId, type]) => {
+        typesMap.set(campaignId, type as "PRODUCT" | "LIVE");
+      });
+      setCampaignTypes(typesMap);
+
       // Update last saved state for UI indicator
       setLastSavedCampaignData(campaignDataText);
 
@@ -576,6 +675,50 @@ export default function URLReplacerPopup() {
   };
 
   /**
+   * Refetch upload statuses from Google Drive
+   */
+  const handleRefetch = async () => {
+    if (isRefetching) return;
+
+    setIsRefetching(true);
+    const loadingToast = toast.loading("Refetching upload statuses...");
+
+    try {
+      // Send message to background script to refetch statuses
+      await new Promise<void>((resolve, reject) => {
+        chrome.runtime.sendMessage({ type: "REFETCH_UPLOAD_STATUSES" }, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (response?.success) {
+            resolve();
+          } else {
+            reject(new Error(response?.error || "Refetch failed"));
+          }
+        });
+      });
+
+      // Reload upload statuses from chrome.storage.local
+      const result = await chrome.storage.local.get([STORAGE_KEYS.UPLOAD_SUCCESS_STATUS]);
+      const chromeSuccessStatuses = result[STORAGE_KEYS.UPLOAD_SUCCESS_STATUS] || {};
+      const statusMap = new Map<string, UploadStatus>();
+      Object.entries(chromeSuccessStatuses).forEach(([campaignName, status]) => {
+        statusMap.set(campaignName, status as UploadStatus);
+      });
+      setUploadStatuses(statusMap);
+
+      toast.dismiss(loadingToast);
+      toast.success("Upload statuses refreshed!");
+    } catch (error) {
+      toast.dismiss(loadingToast);
+      toast.error(`Failed to refetch: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIsRefetching(false);
+    }
+  };
+
+  /**
    * Handle region selection for a campaign
    */
   const handleRegionSelect = (campaignId: string, region: "PH" | "US" | "ID" | "MY") => {
@@ -593,6 +736,30 @@ export default function URLReplacerPopup() {
       // Save to chrome.storage.local for content script access
       if (typeof chrome !== "undefined" && chrome.storage) {
         chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_REGIONS]: regionsObj });
+      }
+
+      return newMap;
+    });
+  };
+
+  /**
+   * Handle campaign type selection for a campaign
+   */
+  const handleCampaignTypeSelect = (campaignId: string, type: "PRODUCT" | "LIVE") => {
+    setCampaignTypes((prev) => {
+      const newMap = new Map(prev);
+      newMap.set(campaignId, type);
+
+      // Persist to localStorage and chrome.storage.local
+      const typesObj: Record<string, string> = {};
+      newMap.forEach((value, key) => {
+        typesObj[key] = value;
+      });
+      localStorage.setItem(STORAGE_KEYS.CAMPAIGN_TYPES, JSON.stringify(typesObj));
+
+      // Save to chrome.storage.local for content script access
+      if (typeof chrome !== "undefined" && chrome.storage) {
+        chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_TYPES]: typesObj });
       }
 
       return newMap;
@@ -767,12 +934,15 @@ export default function URLReplacerPopup() {
         return;
       }
 
+      // Get the campaign type for this campaign
+      const campaignType = campaignTypes.get(campaign.id) || "PRODUCT";
+
       // Calculate timestamps based on region
       const startTimestamp = regionDateToTimestamp(region, startYear, startMonth, startDay);
       const endTimestamp = regionDateToTimestamp(region, endYear, endMonth, endDay);
 
       // Build the campaign URL
-      const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp);
+      const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp, campaignType);
 
       if (typeof chrome !== "undefined" && chrome.tabs) {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -849,7 +1019,7 @@ export default function URLReplacerPopup() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label htmlFor="campaign-data" className="font-bold text-xl text-foreground">
-                    Campaign Name & ID
+                    1. Campaign Name & ID
                   </label>
                   {campaignDataText.trim() && lastSavedCampaignData === campaignDataText && (
                     <div className="flex items-center gap-1 text-xs text-green-600">
@@ -875,7 +1045,7 @@ export default function URLReplacerPopup() {
               <div className="space-y-3 flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-xl text-foreground">
-                    Date Range
+                    2. Date Range
                   </label>
                   <div className="flex gap-2">
                     <Button
@@ -917,7 +1087,7 @@ export default function URLReplacerPopup() {
                   </div>
                 </div>
 
-                <div className="flex gap-2 w-full justify-around">
+                <div className="flex gap-2 w-full justify-between px-3">
                   {/* Start Date */}
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-foreground">Start Date</label>
@@ -1013,7 +1183,7 @@ export default function URLReplacerPopup() {
               </div>
 
               {/* Auto-Click Toggle */}
-              <div className="space-y-2">
+              {/* <div className="space-y-2">
                 <label className="font-bold text-xl text-foreground">
                   Auto-Click Export Button
                 </label>
@@ -1032,7 +1202,7 @@ export default function URLReplacerPopup() {
                     disabled={isLoading}
                   />
                 </div>
-              </div>
+              </div> */}
             </div>
           </>
         ) : (
@@ -1041,13 +1211,14 @@ export default function URLReplacerPopup() {
             <div className="flex items-start justify-between">
               <div className="flex flex-col items-start gap-2">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-2xl font-semibold text-foreground">
+                  <h2 className="text-2xl font-bold  text-foreground">
                     {/* Campaign Navigator */}
                     {/* 캠페인 네비게이터 */}
-                    GMV Max Automation Bot
+                    {/* GMV Max Automation Bot */}
+                    GMV 맥스 자동화 봇
                   </h2>
-                  <Badge>team-mint.io</Badge>
-                  <Badge variant="secondary">Global Team</Badge>
+                  {version && <Badge variant='outline'><BadgeCheckIcon className="size-4" />v{version}</Badge>}
+                  {/* <Badge>team-mint.io</Badge> */}
                 </div>
                 <div className="text-xs text-muted-foreground font-mono flex items-center gap-2">
                   {/* Total {campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''} available */}
@@ -1069,6 +1240,15 @@ export default function URLReplacerPopup() {
                     </span>
                   </div>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRefetch}
+                  disabled={isRefetching}
+                  title="Refetch upload statuses from Google Drive"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isRefetching ? 'animate-spin' : ''}`} />
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1156,25 +1336,49 @@ export default function URLReplacerPopup() {
                                   </div>
                                 </div>
 
-                                {/* Bottom Row: Region Selection Buttons */}
-                                <div className="flex items-center gap-2">
-                                  {(["PH", "US", "ID", "MY"] as const).map((region) => {
-                                    const isSelected = campaignRegions.get(campaign.id) === region;
-                                    const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
-                                    return (
-                                      <Button
-                                        key={region}
-                                        onClick={() => !isCompleted && handleRegionSelect(campaign.id, region)}
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={isCompleted}
-                                        className={`flex-1 h-7 max-w-[50px] text-xs shadow-brutal-button rounded-none transition-colors ${isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
-                                          } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
-                                      >
-                                        {region}
-                                      </Button>
-                                    );
-                                  })}
+                                {/* Bottom Row: Campaign Type & Region Selection Buttons */}
+                                <div className="flex flex-col gap-2">
+                                  {/* Campaign Type Buttons */}
+                                  <div className="flex items-center gap-2">
+                                    {(["PRODUCT", "LIVE"] as const).map((type) => {
+                                      const isSelected = campaignTypes.get(campaign.id) === type;
+                                      const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
+                                      return (
+                                        <Button
+                                          key={type}
+                                          onClick={() => !isCompleted && handleCampaignTypeSelect(campaign.id, type)}
+                                          variant="outline"
+                                          size="sm"
+                                          disabled={isCompleted}
+                                          className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${isSelected ? "border-blue-500 bg-blue-50 text-blue-700" : ""
+                                            } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
+                                        >
+                                          {type}
+                                        </Button>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Region Selection Buttons */}
+                                  <div className="flex items-center gap-2">
+                                    {(["PH", "US", "ID", "MY"] as const).map((region) => {
+                                      const isSelected = campaignRegions.get(campaign.id) === region;
+                                      const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
+                                      return (
+                                        <Button
+                                          key={region}
+                                          onClick={() => !isCompleted && handleRegionSelect(campaign.id, region)}
+                                          variant="outline"
+                                          size="sm"
+                                          disabled={isCompleted}
+                                          className={`flex-1 h-7 max-w-[50px] text-xs shadow-brutal-button rounded-none transition-colors ${isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
+                                            } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
+                                        >
+                                          {region}
+                                        </Button>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
                               </div>
                             </div>
@@ -1260,25 +1464,49 @@ export default function URLReplacerPopup() {
                                     </div>
                                   </div>
 
-                                  {/* Bottom Row: Region Selection Buttons */}
-                                  <div className="flex items-center gap-2 pt-2 border-t border-border/30">
-                                    {(["PH", "US", "ID", "MY"] as const).map((region) => {
-                                      const isSelected = campaignRegions.get(campaign.id) === region;
-                                      const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
-                                      return (
-                                        <Button
-                                          key={region}
-                                          onClick={() => !isCompleted && handleRegionSelect(campaign.id, region)}
-                                          variant="outline"
-                                          size="sm"
-                                          disabled={isCompleted}
-                                          className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
-                                            } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
-                                        >
-                                          {region}
-                                        </Button>
-                                      );
-                                    })}
+                                  {/* Bottom Row: Campaign Type & Region Selection Buttons */}
+                                  <div className="flex flex-col gap-2 pt-2 border-t border-border/30">
+                                    {/* Campaign Type Buttons */}
+                                    <div className="flex items-center gap-2">
+                                      {(["PRODUCT", "LIVE"] as const).map((type) => {
+                                        const isSelected = campaignTypes.get(campaign.id) === type;
+                                        const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
+                                        return (
+                                          <Button
+                                            key={type}
+                                            onClick={() => !isCompleted && handleCampaignTypeSelect(campaign.id, type)}
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={isCompleted}
+                                            className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${isSelected ? "border-blue-500 bg-blue-50 text-blue-700" : ""
+                                              } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
+                                          >
+                                            {type}
+                                          </Button>
+                                        );
+                                      })}
+                                    </div>
+
+                                    {/* Region Selection Buttons */}
+                                    <div className="flex items-center gap-2">
+                                      {(["PH", "US", "ID", "MY"] as const).map((region) => {
+                                        const isSelected = campaignRegions.get(campaign.id) === region;
+                                        const isCompleted = uploadStatuses.get(campaign.name)?.status === "success";
+                                        return (
+                                          <Button
+                                            key={region}
+                                            onClick={() => !isCompleted && handleRegionSelect(campaign.id, region)}
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={isCompleted}
+                                            className={`flex-1 h-7 text-xs shadow-brutal-button rounded-none transition-colors ${isSelected ? "border-green-500 bg-green-50 text-green-700" : ""
+                                              } ${isCompleted ? "cursor-not-allowed opacity-75" : ""}`}
+                                          >
+                                            {region}
+                                          </Button>
+                                        );
+                                      })}
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -1302,7 +1530,8 @@ export default function URLReplacerPopup() {
                   variant="default"
                 >
                   <Settings className="mr-2 h-4 w-4" />
-                  Configure Campaigns
+                  {/* Configure Campaigns */}
+                  캠페인 설정
                 </Button>
               </div>
             )}

@@ -710,6 +710,68 @@ async function injectUploadStatusToast(): Promise<void> {
 }
 
 /**
+ * Inject a date display box showing the configured date range
+ * Positioned above the progress toast
+ */
+async function injectDateDisplayBox(): Promise<void> {
+  if (document.getElementById("gmv-max-date-display")) {
+    return;
+  }
+
+  const dateBox = document.createElement("div");
+  dateBox.id = "gmv-max-date-display";
+  dateBox.className = "gmv-max-date-display";
+  dateBox.style.cssText = `
+    position: fixed;
+    bottom: 238px; /* above progress toast (130px) and upload toast (184px) */
+    right: 32px;
+    z-index: 10000;
+    background: white;
+    border: 2px solid black;
+    box-shadow: 0.2rem 0.2rem 0 0 black;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    width: 150px;
+    text-align: center;
+  `;
+
+  document.body.appendChild(dateBox);
+  await updateDateDisplay();
+  console.log("[GMV Max Navigator] Date display box injected");
+}
+
+/**
+ * Update the date display box with current configured date range
+ */
+async function updateDateDisplay(): Promise<void> {
+  const dateBox = document.getElementById("gmv-max-date-display");
+  if (!dateBox) return;
+
+  try {
+    const result = await chrome.storage.local.get(["gmv_max_date_range"]);
+    const dateRange = result.gmv_max_date_range;
+
+    if (dateRange) {
+      const startDate = `${dateRange.startDay}.${String(dateRange.startMonth).padStart(2, '0')}`;
+      const endDate = `${dateRange.endDay}.${String(dateRange.endMonth).padStart(2, '0')}`;
+
+      dateBox.textContent = `${startDate} - ${endDate}`;
+      dateBox.style.display = "flex";
+    } else {
+      dateBox.style.display = "none";
+    }
+  } catch (e) {
+    dateBox.style.display = "none";
+  }
+}
+
+/**
  * Inject a permanent progress toast showing uploaded/total campaigns
  * Positioned between the upload status toast and the control buttons
  */
@@ -1377,6 +1439,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       // Auto-pause when everything is completed or no campaigns exist
       checkAndPauseIfNoPendingCampaigns();
     }
+
+    // Update date display when date range changes
+    if (changes["gmv_max_date_range"]) {
+      updateDateDisplay();
+    }
   }
 });
 
@@ -1409,6 +1476,7 @@ async function initialize() {
     // Inject UI elements (always visible, disabled if not configured)
     await injectNavigationButtons();
     await injectUploadStatusToast();
+    await injectDateDisplayBox();
     await injectProgressToast();
     await injectControlButtons();
 
