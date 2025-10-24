@@ -2,9 +2,9 @@
 
 import * as React from "react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { ChevronLeft, Trash2, CheckCircle2 } from "lucide-react";
 import { DateRangePicker } from "./DateRangePicker";
+import { CampaignInput } from "./CampaignInput";
 
 interface SettingsViewProps {
   campaignDataText: string;
@@ -90,17 +90,11 @@ export function SettingsView({
               </div>
             )}
           </div>
-          <Textarea
-            id="campaign-data"
-            placeholder="CNT-CleansingOil-200ml_250512_PH_ProductGMV    1831881764572194&#10;CNT-DoubleCleansingDuo-None_250512_PH_ProductGMV    1831884518268977"
+          <CampaignInput
             value={campaignDataText}
-            onChange={(e) => onCampaignDataChange(e.target.value)}
-            className="h-fit font-mono text-xs"
+            onChange={onCampaignDataChange}
             disabled={isLoading}
           />
-          <div className="text-xs text-muted-foreground">
-            {campaignDataText.split("\n").filter(line => line.trim()).length} campaigns
-          </div>
         </div>
 
         {/* Date Range Input */}

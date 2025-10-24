@@ -10,8 +10,8 @@ const version = manifestJson.version;
 
 // Define paths
 const distDir = path.join(__dirname, '../dist');
-const tempDir = path.join(__dirname, `../gmv-max-automation-bot-v${version}`);
-const zipFile = path.join(__dirname, `../gmv-max-automation-bot-v${version}.zip`);
+const tempDir = path.join(__dirname, `../gmv-max-v${version}`);
+const zipFile = path.join(__dirname, `../gmv-max-v${version}.zip`);
 
 console.log(`📦 Packaging extension v${version}...`);
 
@@ -55,7 +55,7 @@ try {
     );
   } else {
     // Unix/Mac: Use zip command
-    const folderName = `gmv-max-automation-bot-v${version}`;
+    const folderName = `gmv-max-v${version}`;
     execSync(
       `cd "${path.dirname(tempDir)}" && zip -r "${path.basename(zipFile)}" "${folderName}"`,
       { stdio: 'inherit' }

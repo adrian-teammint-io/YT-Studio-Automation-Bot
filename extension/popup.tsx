@@ -23,8 +23,6 @@ export default function URLReplacerPopup() {
   const [uploadStatuses, setUploadStatuses] = React.useState<Map<string, UploadStatus>>(new Map());
   const activeToastsRef = React.useRef<Map<string, string | number>>(new Map());
   const [lastSavedCampaignData, setLastSavedCampaignData] = React.useState("");
-  const [campaignRegions, setCampaignRegions] = React.useState<Map<string, RegionType>>(new Map());
-  const [campaignTypes, setCampaignTypes] = React.useState<Map<string, CampaignType>>(new Map());
   const [version, setVersion] = React.useState<string>("");
   const [isRefetching, setIsRefetching] = React.useState(false);
 
@@ -92,76 +90,9 @@ export default function URLReplacerPopup() {
         if (storedCampaignData) {
           const data = JSON.parse(storedCampaignData);
           setCampaigns(data);
-          setCampaignDataText(data.map((c: Campaign) => `${c.name}    ${c.id}`).join("\n"));
-
-          // Auto-populate region defaults from campaign names
-          const storedRegions = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_REGIONS);
-          const existingRegions = storedRegions ? JSON.parse(storedRegions) : {};
-          let hasNewRegions = false;
-
-          data.forEach((campaign: Campaign) => {
-            if (!existingRegions[campaign.id]) {
-              const regionInfo = detectRegionFromCampaign(campaign.name);
-              if (regionInfo) {
-                const regionMap: Record<string, RegionType> = {
-                  "2.WEST_US": "US",
-                  "1.EAST_PH": "PH",
-                  "1.EAST_MY": "MY",
-                  "1.EAST_ID": "ID"
-                };
-
-                const buttonRegion = regionMap[regionInfo.region];
-                if (buttonRegion) {
-                  existingRegions[campaign.id] = buttonRegion;
-                  hasNewRegions = true;
-                }
-              }
-            }
-          });
-
-          if (hasNewRegions) {
-            localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(existingRegions));
-          }
-
-          if (typeof chrome !== "undefined" && chrome.storage && Object.keys(existingRegions).length > 0) {
-            chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_REGIONS]: existingRegions });
-          }
-
-          const regionsMap = new Map<string, RegionType>();
-          Object.entries(existingRegions).forEach(([campaignId, region]) => {
-            regionsMap.set(campaignId, region as RegionType);
-          });
-          setCampaignRegions(regionsMap);
-
-          // Load campaign types from localStorage
-          const storedTypes = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_TYPES);
-          const existingTypes = storedTypes ? JSON.parse(storedTypes) : {};
-          let hasNewTypes = false;
-
-          data.forEach((campaign: Campaign) => {
-            const isLiveCampaign = LIVE_CAMPAIGNS.some(
-              lc => lc.name === campaign.name && lc.id === campaign.id
-            );
-
-            if (!existingTypes[campaign.id]) {
-              existingTypes[campaign.id] = isLiveCampaign ? "LIVE" : "PRODUCT";
-              hasNewTypes = true;
-            }
-          });
-
-          if (hasNewTypes) {
-            localStorage.setItem(STORAGE_KEYS.CAMPAIGN_TYPES, JSON.stringify(existingTypes));
-          }
-
-          if (typeof chrome !== "undefined" && chrome.storage && Object.keys(existingTypes).length > 0) {
-            chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_TYPES]: existingTypes });
-          }
-
-          const typesMap = new Map<string, CampaignType>();
-          Object.entries(existingTypes).forEach(([campaignId, type]) => {
-            typesMap.set(campaignId, type as CampaignType);
-          });
-          setCampaignTypes(typesMap);
+          setCampaignDataText(data.map((c: Campaign) =>
+            `${c.name}    ${c.id}${c.region ? `    ${c.region}` : ""}${c.type ? `    ${c.type}` : ""}`
+          ).join("\n"));
         }
 
         if (storedIndex) {
@@ -315,10 +246,17 @@ export default function URLReplacerPopup() {
         .map(line => {
           const parts = line.trim().split(/\s{2,}|\t+/);
           if (parts.length >= 2) {
-            return {
+            const campaign: Campaign = {
               name: parts[0].trim(),
-              id: parts[parts.length - 1].trim(),
+              id: parts[1].trim(),
             };
+            if (parts[2]?.trim()) {
+              campaign.region = parts[2].trim() as RegionType;
+            }
+            if (parts[3]?.trim()) {
+              campaign.type = parts[3].trim() as CampaignType;
+            }
+            return campaign;
           }
           return null;
         })
@@ -332,69 +270,6 @@ export default function URLReplacerPopup() {
       setCurrentIndex(0);
       localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, "0");
       chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: "0" });
-
-      // Auto-populate region defaults for new campaigns
-      const storedRegions = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_REGIONS);
-      const existingRegions = storedRegions ? JSON.parse(storedRegions) : {};
-      let hasNewRegions = false;
-
-      parsedCampaigns.forEach((campaign) => {
-        if (!existingRegions[campaign.id]) {
-          const regionInfo = detectRegionFromCampaign(campaign.name);
-          if (regionInfo) {
-            const regionMap: Record<string, RegionType> = {
-              "2.WEST_US": "US",
-              "1.EAST_PH": "PH",
-              "1.EAST_MY": "MY",
-              "1.EAST_ID": "ID"
-            };
-
-            const buttonRegion = regionMap[regionInfo.region];
-            if (buttonRegion) {
-              existingRegions[campaign.id] = buttonRegion;
-              hasNewRegions = true;
-            }
-          }
-        }
-      });
-
-      if (hasNewRegions) {
-        localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(existingRegions));
-        chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_REGIONS]: existingRegions });
-      }
-
-      const regionsMap = new Map<string, RegionType>();
-      Object.entries(existingRegions).forEach(([campaignId, region]) => {
-        regionsMap.set(campaignId, region as RegionType);
-      });
-      setCampaignRegions(regionsMap);
-
-      // Auto-populate campaign type defaults for new campaigns
-      const storedTypes = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_TYPES);
-      const existingTypes = storedTypes ? JSON.parse(storedTypes) : {};
-      let hasNewTypes = false;
-
-      parsedCampaigns.forEach((campaign) => {
-        const isLiveCampaign = LIVE_CAMPAIGNS.some(
-          lc => lc.name === campaign.name && lc.id === campaign.id
-        );
-
-        if (!existingTypes[campaign.id]) {
-          existingTypes[campaign.id] = isLiveCampaign ? "LIVE" : "PRODUCT";
-          hasNewTypes = true;
-        }
-      });
-
-      if (hasNewTypes) {
-        localStorage.setItem(STORAGE_KEYS.CAMPAIGN_TYPES, JSON.stringify(existingTypes));
-        chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_TYPES]: existingTypes });
-      }
-
-      const typesMap = new Map<string, CampaignType>();
-      Object.entries(existingTypes).forEach(([campaignId, type]) => {
-        typesMap.set(campaignId, type as CampaignType);
-      });
-      setCampaignTypes(typesMap);
 
       setLastSavedCampaignData(campaignDataText);
 
@@ -474,44 +349,6 @@ export default function URLReplacerPopup() {
     } finally {
       setIsRefetching(false);
     }
-  };
-
-  const handleRegionSelect = (campaignId: string, region: RegionType) => {
-    setCampaignRegions((prev) => {
-      const newMap = new Map(prev);
-      newMap.set(campaignId, region);
-
-      const regionsObj: Record<string, string> = {};
-      newMap.forEach((value, key) => {
-        regionsObj[key] = value;
-      });
-      localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(regionsObj));
-
-      if (typeof chrome !== "undefined" && chrome.storage) {
-        chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_REGIONS]: regionsObj });
-      }
-
-      return newMap;
-    });
-  };
-
-  const handleCampaignTypeSelect = (campaignId: string, type: CampaignType) => {
-    setCampaignTypes((prev) => {
-      const newMap = new Map(prev);
-      newMap.set(campaignId, type);
-
-      const typesObj: Record<string, string> = {};
-      newMap.forEach((value, key) => {
-        typesObj[key] = value;
-      });
-      localStorage.setItem(STORAGE_KEYS.CAMPAIGN_TYPES, JSON.stringify(typesObj));
-
-      if (typeof chrome !== "undefined" && chrome.storage) {
-        chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_TYPES]: typesObj });
-      }
-
-      return newMap;
-    });
   };
 
   const setToday = () => {
@@ -630,14 +467,14 @@ export default function URLReplacerPopup() {
 
     try {
       const campaign = campaigns[index];
-      const region = campaignRegions.get(campaign.id);
+      const region = campaign.region;
       if (!region) {
         toast.error("Please select a region for this campaign");
         setIsLoading(false);
         return;
       }
 
-      const campaignType = campaignTypes.get(campaign.id) || "PRODUCT";
+      const campaignType = campaign.type || "PRODUCT";
 
       const startTimestamp = regionDateToTimestamp(region, startYear, startMonth, startDay);
       const endTimestamp = regionDateToTimestamp(region, endYear, endMonth, endDay);
@@ -713,16 +550,12 @@ export default function URLReplacerPopup() {
             campaigns={campaigns}
             currentIndex={currentIndex}
             uploadStatuses={uploadStatuses}
-            campaignRegions={campaignRegions}
-            campaignTypes={campaignTypes}
             version={version}
             isLoading={isLoading}
             isRefetching={isRefetching}
             uploadStatusInfo={uploadStatusInfo}
             onTriggerWorkflow={triggerWorkflow}
             onNavigateToGoogleDrive={navigateToGoogleDrive}
-            onRegionSelect={handleRegionSelect}
-            onTypeSelect={handleCampaignTypeSelect}
             onRefetch={handleRefetch}
             onOpenSettings={() => setIsSettingsView(true)}
           />

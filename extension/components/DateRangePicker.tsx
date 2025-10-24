@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Button } from "@/components/ui/button";
+import { AudioWaveformIcon } from "lucide-react";
 
 interface DateRangePickerProps {
   startYear: number;
@@ -88,7 +89,7 @@ export function DateRangePicker({
         </div>
       </div>
 
-      <div className="flex gap-2 w-full justify-between px-3">
+      <div className="flex gap-2 w-full justify-around px-8 items-center">
         {/* Start Date */}
         <div className="space-y-2">
           <label className="text-sm font-medium text-foreground">Start Date</label>
@@ -134,6 +135,8 @@ export function DateRangePicker({
             </div>
           </div>
         </div>
+
+        <div className="flex items-center justify-center"><AudioWaveformIcon className="size-8" /></div>
 
         {/* End Date */}
         <div className="space-y-2">

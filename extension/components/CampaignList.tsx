@@ -11,16 +11,12 @@ interface CampaignListProps {
   campaigns: Campaign[];
   currentIndex: number;
   uploadStatuses: Map<string, UploadStatus>;
-  campaignRegions: Map<string, RegionType>;
-  campaignTypes: Map<string, CampaignType>;
   version: string;
   isLoading: boolean;
   isRefetching: boolean;
   uploadStatusInfo: { campaignName: string; status: UploadStatus; type: "uploading" } | null;
   onTriggerWorkflow: (index: number, event: React.MouseEvent) => void;
   onNavigateToGoogleDrive: (index: number, event: React.MouseEvent) => void;
-  onRegionSelect: (campaignId: string, region: RegionType) => void;
-  onTypeSelect: (campaignId: string, type: CampaignType) => void;
   onRefetch: () => void;
   onOpenSettings: () => void;
 }
@@ -29,16 +25,12 @@ export function CampaignList({
   campaigns,
   currentIndex,
   uploadStatuses,
-  campaignRegions,
-  campaignTypes,
   version,
   isLoading,
   isRefetching,
   uploadStatusInfo,
   onTriggerWorkflow,
   onNavigateToGoogleDrive,
-  onRegionSelect,
-  onTypeSelect,
   onRefetch,
   onOpenSettings,
 }: CampaignListProps) {
@@ -117,14 +109,10 @@ export function CampaignList({
                       index={index}
                       currentIndex={currentIndex}
                       uploadStatus={uploadStatuses.get(campaign.name)}
-                      selectedRegion={campaignRegions.get(campaign.id)}
-                      selectedType={campaignTypes.get(campaign.id)}
                       isCompleted={true}
                       isLoading={isLoading}
                       onTriggerWorkflow={onTriggerWorkflow}
                       onNavigateToGoogleDrive={onNavigateToGoogleDrive}
-                      onRegionSelect={onRegionSelect}
-                      onTypeSelect={onTypeSelect}
                     />
                   ))}
                 </div>
@@ -152,14 +140,10 @@ export function CampaignList({
                         index={index}
                         currentIndex={currentIndex}
                         uploadStatus={uploadStatuses.get(campaign.name)}
-                        selectedRegion={campaignRegions.get(campaign.id)}
-                        selectedType={campaignTypes.get(campaign.id)}
                         isCompleted={false}
                         isLoading={isLoading}
                         onTriggerWorkflow={onTriggerWorkflow}
                         onNavigateToGoogleDrive={onNavigateToGoogleDrive}
-                        onRegionSelect={onRegionSelect}
-                        onTypeSelect={onTypeSelect}
                       />
                     ))}
                   </div>
