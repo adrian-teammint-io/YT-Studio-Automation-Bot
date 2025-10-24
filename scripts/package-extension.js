@@ -4,21 +4,37 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
+// Parse command line arguments
+const args = process.argv.slice(2);
+const outputDir = args[0] ? path.resolve(args[0]) : path.resolve('/Users/adrian-phan.team-mint.io/GMV_Max_Releases');
+
 // Read manifest.json to get version
 const manifestJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../public/manifest.json'), 'utf8'));
 const version = manifestJson.version;
 
 // Define paths
 const distDir = path.join(__dirname, '../dist');
-const tempDir = path.join(__dirname, `../gmv-max-v${version}`);
-const zipFile = path.join(__dirname, `../gmv-max-v${version}.zip`);
+const tempDir = path.join(outputDir, `gmv-max-v${version}`);
+const zipFile = path.join(outputDir, `gmv-max-v${version}.zip`);
 
 console.log(`📦 Packaging extension v${version}...`);
+console.log(`📁 Output directory: ${outputDir}`);
 
 // Check if dist folder exists
 if (!fs.existsSync(distDir)) {
   console.error('❌ Error: dist folder not found. Run "npm run build:extension" first.');
   process.exit(1);
+}
+
+// Ensure output directory exists
+if (!fs.existsSync(outputDir)) {
+  console.log(`📁 Creating output directory: ${outputDir}`);
+  try {
+    fs.mkdirSync(outputDir, { recursive: true });
+  } catch (error) {
+    console.error('❌ Error creating output directory:', error.message);
+    process.exit(1);
+  }
 }
 
 // Remove temp directory if it exists
@@ -79,3 +95,12 @@ if (fs.existsSync(tempDir)) {
 console.log(`✅ Extension packaged successfully!`);
 console.log(`📦 Output: ${path.basename(zipFile)}`);
 console.log(`📍 Location: ${zipFile}`);
+
+// // Show usage help if no arguments provided
+// if (args.length === 0) {
+//   console.log(`\n💡 Usage: node package-extension.js [output-directory]`);
+//   console.log(`   Examples:`);
+//   console.log(`   - node package-extension.js                    # Output to GMV_Max_Releases (default)`);
+//   console.log(`   - node package-extension.js ~/Downloads        # Output to Downloads folder`);
+//   console.log(`   - node package-extension.js /path/to/releases   # Output to custom directory`);
+// }

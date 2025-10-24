@@ -3,9 +3,11 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Settings, Loader2, BadgeCheckIcon, RefreshCw } from "lucide-react";
+import { Settings, Loader2, BadgeCheckIcon, RefreshCw, Play, Pause } from "lucide-react";
 import { CampaignItem } from "./CampaignItem";
+import { STORAGE_KEYS } from "../constants/storage";
 import type { Campaign, UploadStatus, RegionType, CampaignType } from "../types/campaign";
+import { cn } from "@/lib/utils";
 
 interface CampaignListProps {
   campaigns: Campaign[];
@@ -19,6 +21,7 @@ interface CampaignListProps {
   onNavigateToGoogleDrive: (index: number, event: React.MouseEvent) => void;
   onRefetch: () => void;
   onOpenSettings: () => void;
+  onStartWorkflow?: () => void;
 }
 
 export function CampaignList({
@@ -33,11 +36,48 @@ export function CampaignList({
   onNavigateToGoogleDrive,
   onRefetch,
   onOpenSettings,
+  onStartWorkflow,
 }: CampaignListProps) {
+  const [isWorkflowPaused, setIsWorkflowPaused] = React.useState(true);
   const completedCount = campaigns.filter(c => uploadStatuses.get(c.name)?.status === "success").length;
+
+  // Load workflow state from chrome storage on mount
+  React.useEffect(() => {
+    chrome.storage.local.get([STORAGE_KEYS.WORKFLOW_PAUSED], (result) => {
+      setIsWorkflowPaused(result[STORAGE_KEYS.WORKFLOW_PAUSED] !== false);
+    });
+  }, []);
+
+  // Listen for storage changes
+  React.useEffect(() => {
+    const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
+      if (areaName === "local" && changes[STORAGE_KEYS.WORKFLOW_PAUSED]) {
+        setIsWorkflowPaused(changes[STORAGE_KEYS.WORKFLOW_PAUSED].newValue !== false);
+      }
+    };
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+    return () => chrome.storage.onChanged.removeListener(handleStorageChange);
+  }, []);
+
+  const handleStartPauseClick = () => {
+    if (isWorkflowPaused && onStartWorkflow) {
+      // Start workflow - open first uncompleted campaign in new tab
+      onStartWorkflow();
+      setIsWorkflowPaused(false);
+      chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: false });
+    } else {
+      // Pause workflow
+      setIsWorkflowPaused(true);
+      chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: true });
+    }
+  };
+
+  const hasPendingCampaigns = campaigns.length > 0 && completedCount < campaigns.length;
 
   return (
     <>
+
       <div className="flex items-start justify-between">
         <div className="flex flex-col items-start gap-2">
           <div className="flex items-center gap-2">
@@ -60,14 +100,23 @@ export function CampaignList({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {campaigns.length > 0 && uploadStatusInfo && uploadStatusInfo.type === "uploading" && (
+          {/* {campaigns.length > 0 && uploadStatusInfo && uploadStatusInfo.type === "uploading" && (
             <div className="flex items-center gap-2 px-3 py-2 border-2 rounded-none shadow-brutal-button border-blue-500 bg-blue-50" style={{ width: "150px" }}>
               <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
               <span className="text-sm font-medium text-blue-700">
                 업로드 중...
               </span>
             </div>
-          )}
+          )} */}
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.open("https://docs.google.com/spreadsheets/d/10L5kkL9--JeQl7gkZu95S1sxELb6bu323vhjlgv9JJU/edit?gid=1715170512#gid=1715170512", "_blank")}
+            title="Refetch upload statuses from Google Drive"
+          >
+            <img src="/google-sheets-icon.png" alt="Google Drive" className="size-6" />
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -87,6 +136,25 @@ export function CampaignList({
         </div>
       </div>
 
+      {/* Start/Pause Button */}
+      {campaigns.length > 0 && (
+        <div className="flex justify-center w-full items-center gap-3">
+          <div className="bg-black w-full h-[2px]" />
+          <Button
+            onClick={handleStartPauseClick}
+            disabled={!hasPendingCampaigns}
+            className={cn("w-[100px] h-12 px-4 border-black border-2 text-base font-semibold !cursor-pointer", isWorkflowPaused ? "bg-[#89fc00]" : "bg-[#ff2c55]")}
+          >
+            {isWorkflowPaused ? (
+              <Play className="size-5 text-black" />
+            ) : (
+              <Pause className="size-5 text-black" />
+            )}
+          </Button>
+          <div className="bg-black w-full h-[2px]" />
+        </div>
+      )}
+
       {/* Campaign List */}
       {campaigns.length > 0 ? (
         <div className="flex flex-col space-y-4">
@@ -98,7 +166,7 @@ export function CampaignList({
 
             return completedCampaigns.length > 0 ? (
               <div className="space-y-2">
-                <h3 className="font-semibold text-sm text-foreground px-1">
+                <h3 className="font-semibold text-[#04e762] text-sm px-1">
                   완료됨 ({completedCampaigns.length})
                 </h3>
                 <div className="flex flex-col space-y-2">
@@ -128,7 +196,7 @@ export function CampaignList({
 
             return (
               <div className="space-y-2">
-                <h3 className="font-semibold text-sm text-foreground px-1">
+                <h3 className="font-semibold text-[#008bf8] text-sm px-1">
                   전체 ({allCampaigns.length})
                 </h3>
                 {allCampaigns.length > 0 ? (

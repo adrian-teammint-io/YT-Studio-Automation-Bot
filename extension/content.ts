@@ -10,7 +10,6 @@ import { buildCampaignUrl } from "./utils/url-builder";
 import type { CampaignType } from "./types/campaign";
 
 const STORAGE_KEY = "gmv_max_auto_click_enabled";
-const WORKFLOW_PAUSED_KEY = "gmv_max_workflow_paused";
 const MAX_RETRY_ATTEMPTS = 10;
 const RETRY_INTERVAL = 1000; // 1 second
 const DOWNLOAD_DETECTION_DELAY = 3000; // Wait 3 seconds after clicking before checking downloads
@@ -918,7 +917,7 @@ async function checkAndPauseIfNoPendingCampaigns(): Promise<void> {
     if (!hasPending) {
       // No campaigns or all completed -> pause
       isAutoNavigationPaused = true;
-      chrome.storage.local.set({ [WORKFLOW_PAUSED_KEY]: true });
+      chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: true });
       updateControlButtons();
       updateUploadStatusToast("idle");
       console.log("[GMV Max Navigator] No pending campaigns. Workflow paused.");
@@ -1106,7 +1105,7 @@ async function injectControlButtons(): Promise<void> {
     isAutoNavigationPaused = true;
 
     // Persist workflow paused state to localStorage
-    chrome.storage.local.set({ [WORKFLOW_PAUSED_KEY]: true });
+    chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: true });
 
     await updateControlButtons();
     console.log("[GMV Max Navigator] Auto-navigation paused");
@@ -1121,7 +1120,7 @@ async function injectControlButtons(): Promise<void> {
     isAutoNavigationPaused = false;
 
     // Persist workflow resumed state to localStorage
-    chrome.storage.local.set({ [WORKFLOW_PAUSED_KEY]: false });
+    chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: false });
 
     // Reset the click flag to allow clicking again
     hasClickedExportButton = false;
@@ -1393,6 +1392,14 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     if (changes["gmv_max_date_range"]) {
       updateDateDisplay();
     }
+
+    // Sync workflow paused state with popup
+    if (changes[STORAGE_KEYS.WORKFLOW_PAUSED]) {
+      const newPausedState = changes[STORAGE_KEYS.WORKFLOW_PAUSED].newValue;
+      isAutoNavigationPaused = newPausedState !== false;
+      console.log("[GMV Max Navigator] Workflow paused state synced from storage:", isAutoNavigationPaused);
+      updateControlButtons();
+    }
   }
 });
 
@@ -1413,9 +1420,9 @@ async function initialize() {
 
     // Restore paused/resumed state from storage (default to paused)
     try {
-      const storedState = await chrome.storage.local.get([WORKFLOW_PAUSED_KEY]);
+      const storedState = await chrome.storage.local.get([STORAGE_KEYS.WORKFLOW_PAUSED]);
       // If explicitly set to false, it means resumed; otherwise treat as paused by default
-      isAutoNavigationPaused = storedState[WORKFLOW_PAUSED_KEY] !== false;
+      isAutoNavigationPaused = storedState[STORAGE_KEYS.WORKFLOW_PAUSED] !== false;
       console.log("[GMV Max Navigator] Restored paused state:", isAutoNavigationPaused);
     } catch (e) {
       console.warn("[GMV Max Navigator] Failed to restore paused state, defaulting to paused");

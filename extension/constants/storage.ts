@@ -8,4 +8,5 @@ export const STORAGE_KEYS = {
   CAMPAIGN_REGIONS: "gmv_max_campaign_regions",
   CAMPAIGN_TYPES: "gmv_max_campaign_types",
   DATE_RANGE: "gmv_max_date_range",
+  WORKFLOW_PAUSED: "gmv_max_workflow_paused",
 } as const;

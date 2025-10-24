@@ -516,6 +516,59 @@ export default function URLReplacerPopup() {
     return null;
   }, [uploadStatuses]);
 
+  const handleStartWorkflow = async () => {
+    if (campaigns.length === 0) {
+      toast.error("No campaigns available");
+      return;
+    }
+
+    try {
+      // Find first uncompleted campaign
+      let firstIndex = -1;
+      for (let i = 0; i < campaigns.length; i++) {
+        const campaign = campaigns[i];
+        const uploadStatus = uploadStatuses.get(campaign.name);
+
+        if (!uploadStatus || uploadStatus.status !== "success") {
+          firstIndex = i;
+          break;
+        }
+      }
+
+      if (firstIndex === -1) {
+        toast.error("All campaigns completed! 🎉");
+        return;
+      }
+
+      const campaign = campaigns[firstIndex];
+      const region = campaign.region;
+
+      if (!region) {
+        toast.error(`Please select a region for campaign: ${campaign.name}`);
+        return;
+      }
+
+      const campaignType = campaign.type || "PRODUCT";
+      const startTimestamp = regionDateToTimestamp(region, startYear, startMonth, startDay);
+      const endTimestamp = regionDateToTimestamp(region, endYear, endMonth, endDay);
+      const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp, campaignType);
+
+      // Open in new tab
+      if (typeof chrome !== "undefined" && chrome.tabs) {
+        await chrome.tabs.create({ url: newUrl });
+
+        setCurrentIndex(firstIndex);
+        localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, firstIndex.toString());
+        chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: firstIndex.toString() });
+
+        toast.success(`Opening campaign: ${campaign.name}`);
+      }
+    } catch (error) {
+      console.error("Failed to start workflow:", error);
+      toast.error("Failed to start workflow");
+    }
+  };
+
   return (
     <div className="bg-white" style={{ width: POPUP_WIDTH, height: "300px" }}>
       <Toaster duration={1500} position="top-center" />
@@ -558,6 +611,7 @@ export default function URLReplacerPopup() {
             onNavigateToGoogleDrive={navigateToGoogleDrive}
             onRefetch={handleRefetch}
             onOpenSettings={() => setIsSettingsView(true)}
+            onStartWorkflow={handleStartWorkflow}
           />
         )}
       </div>

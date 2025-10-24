@@ -3,8 +3,10 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, XCircle, Cat, FolderOpen } from "lucide-react";
+import { Loader2, XCircle, Cat, FolderOpen, Link2Icon } from "lucide-react";
 import type { Campaign, UploadStatus } from "../types/campaign";
+import { getRegionBadgeColor, getTypeBadgeColor, getBadgeStyle } from "../utils/badgeColors";
+import { ExternalLinkIcon } from "@radix-ui/react-icons";
 
 interface CampaignItemProps {
   campaign: Campaign;
@@ -50,12 +52,18 @@ export function CampaignItem({
                 {campaign.id}
               </div>
               {campaign.region && (
-                <Badge variant="outline" className="text-xs h-5 px-1.5">
+                <Badge
+                  className="text-xs h-5 px-1.5"
+                  style={getBadgeStyle(getRegionBadgeColor(campaign.region))}
+                >
                   {campaign.region}
                 </Badge>
               )}
               {campaign.type && (
-                <Badge variant="outline" className="text-xs h-5 px-1.5">
+                <Badge
+                  className="text-xs h-5 px-1.5"
+                  style={getBadgeStyle(getTypeBadgeColor(campaign.type))}
+                >
                   {campaign.type}
                 </Badge>
               )}
@@ -86,7 +94,7 @@ export function CampaignItem({
                 className="shadow-brutal-button rounded-none h-8 w-8 p-0"
                 title="Start download and upload workflow"
               >
-                <Cat className="size-4" />
+                <ExternalLinkIcon className="size-4" />
               </Button>
             )}
 
