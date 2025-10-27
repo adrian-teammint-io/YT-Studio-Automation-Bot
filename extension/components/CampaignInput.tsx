@@ -4,7 +4,6 @@ import * as React from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2 } from "lucide-react";
-import { detectRegionFromCampaign } from "../utils/region-detector";
 import { LIVE_CAMPAIGNS } from "../../lib/live_campaigns";
 import { mapParentFolderToRegion } from "../lib/parent-folder-mapper";
 import type { RegionType, CampaignType } from "../types/campaign";
@@ -39,7 +38,11 @@ export function CampaignInput({ value, onChange, disabled = false, onDatesExtrac
     try {
       const date = new Date(dateStr);
       if (!isNaN(date.getTime())) {
-        return date.toISOString().split('T')[0]; // Returns YYYY-MM-DD
+        // Use local timezone components to avoid UTC conversion issues
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`; // Returns YYYY-MM-DD in local timezone
       }
     } catch (e) {
       // If parsing fails, return as-is
@@ -47,27 +50,20 @@ export function CampaignInput({ value, onChange, disabled = false, onDatesExtrac
     return dateStr;
   };
 
-  // Helper function to detect region from parent folder or campaign name
+  // Helper function to detect region from parent folder ONLY
   const detectRegion = (parentFolder: string, name: string): RegionType => {
-    // First priority: use parent folder if available
+    // ONLY use parent folder from pasted data (5th column)
+    // Example: "1.EAST_ID" -> "ID"
     if (parentFolder && parentFolder.trim()) {
       const regionFromFolder = mapParentFolderToRegion(parentFolder);
       if (regionFromFolder) {
+        console.log(`[Region Detection] Using parent folder "${parentFolder}" -> "${regionFromFolder}"`);
         return regionFromFolder;
       }
     }
 
-    // Fallback: detect from campaign name
-    const regionInfo = detectRegionFromCampaign(name);
-    if (regionInfo) {
-      const regionMap: Record<string, RegionType> = {
-        "2.WEST_US": "US",
-        "1.EAST_PH": "PH",
-        "1.EAST_MY": "MY",
-        "1.EAST_ID": "ID"
-      };
-      return regionMap[regionInfo.region] || "US";
-    }
+    // Fallback: default to US if no parent folder provided
+    console.warn(`[Region Detection] No parent folder provided, defaulting to US for: "${name}"`);
     return "US";
   };
 

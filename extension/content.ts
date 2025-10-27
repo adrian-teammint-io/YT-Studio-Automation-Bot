@@ -964,14 +964,16 @@ async function updateControlButtons(): Promise<void> {
   const resumeButton = document.getElementById("gmv-max-resume-btn") as HTMLButtonElement | null;
 
   if (stopButton && resumeButton) {
-    // Check if campaigns are configured (only need campaign data now)
+    // Check if campaigns and date range are configured
     const result = await chrome.storage.local.get([
       "gmv_max_campaign_data",
       "gmv_max_upload_success_status",
+      "gmv_max_date_range",
     ]);
     const campaigns = result.gmv_max_campaign_data || [];
+    const dateRange = result.gmv_max_date_range;
     const successStatuses: Record<string, { status: string }> = result.gmv_max_upload_success_status || {};
-    const isConfigured = campaigns.length > 0;
+    const isConfigured = campaigns.length > 0 && dateRange;
 
     // Check if progress is full (all campaigns uploaded)
     const total = campaigns.length;
@@ -1015,10 +1017,11 @@ async function updateNavigationButtons(): Promise<void> {
   const nextButton = document.getElementById("gmv-max-next-campaign-btn") as HTMLButtonElement | null;
 
   if (prevButton && nextButton) {
-    // Check if campaigns are configured (only need campaign data now)
-    const result = await chrome.storage.local.get(["gmv_max_campaign_data"]);
+    // Check if campaigns and date range are configured
+    const result = await chrome.storage.local.get(["gmv_max_campaign_data", "gmv_max_date_range"]);
     const campaigns = result.gmv_max_campaign_data || [];
-    const isConfigured = campaigns.length > 0;
+    const dateRange = result.gmv_max_date_range;
+    const isConfigured = campaigns.length > 0 && dateRange;
 
     // Disable buttons if not configured
     const shouldDisable = !isConfigured;
@@ -1183,10 +1186,11 @@ async function injectNavigationButtons(): Promise<void> {
     return;
   }
 
-  // Check if campaigns are configured (only need campaign data now)
-  const result = await chrome.storage.local.get(["gmv_max_campaign_data"]);
+  // Check if campaigns and date range are configured
+  const result = await chrome.storage.local.get(["gmv_max_campaign_data", "gmv_max_date_range"]);
   const campaigns = result.gmv_max_campaign_data || [];
-  const isConfigured = campaigns.length > 0;
+  const dateRange = result.gmv_max_date_range;
+  const isConfigured = campaigns.length > 0 && dateRange;
 
   // Create container for buttons
   const container = document.createElement("div");
@@ -1420,6 +1424,9 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     // Update date display when date range changes
     if (changes["gmv_max_date_range"]) {
       updateDateDisplay();
+      // Also update button states since date range affects their enabled state
+      updateNavigationButtons();
+      updateControlButtons();
     }
 
     // Sync workflow paused state with popup

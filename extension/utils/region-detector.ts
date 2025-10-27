@@ -35,23 +35,23 @@ export const REGION_MAPPINGS: RegionMapping[] = [
   {
     region: "1.EAST_PH",
     folderId: "1nX2nVy-Oa2r9o-tke9EIci-Za7iCxl48", // 1.EAST_PH (Shared Drive)
-    // Match PH in various formats: _PH_, PH(, PH_, PHspace, or PH at end
-    // Examples: "campaign_PH_data", "SKIN1004PH(1st)", "campaignPH_official"
-    pattern: /(?:_PH_|PH(?=[_\(\s]|$))/i,
+    // Match PH in various formats: _PH_, PH(, PH_, PHspace, PH at end, or PHILIPPINES
+    // Examples: "campaign_PH_data", "SKIN1004PH(1st)", "campaignPH_official", "SKIN1004PHILIPPINES_1ST"
+    pattern: /(?:_PH_|PH(?=[_\(\s]|$)|PHILIPP(?:INES?|INE))/i,
   },
   {
     region: "1.EAST_MY",
     folderId: "1QPXQu2xHKi441YE_UhpXU_t37UJSA2cv", // 1.EAST_MY (Shared Drive)
-    // Match MY in various formats: _MY_, MY(, MY_, MYspace, or MY at end
-    // Examples: "campaign_MY_data", "SKIN1004MY(1st)", "skin1004my_official"
-    pattern: /(?:_MY_|MY(?=[_\(\s]|$))/i,
+    // Match MY in various formats: _MY_, MY(, MY_, MYspace, MY at end, or MALAYSIA
+    // Examples: "campaign_MY_data", "SKIN1004MY(1st)", "skin1004my_official", "SKIN1004MALAYSIA_1ST"
+    pattern: /(?:_MY_|MY(?=[_\(\s]|$)|MALAYSIA)/i,
   },
   {
     region: "1.EAST_ID",
     folderId: "1NGFgCLmFu1If39D8XQnolOV5t1zPVrRm", // 1.EAST_ID (Shared Drive)
-    // Match ID in various formats: _ID_, ID(, ID_, IDspace, or ID at end
-    // Examples: "campaign_ID_data", "SKIN1004ID(1st)", "campaignID_official"
-    pattern: /(?:_ID_|ID(?=[_\(\s]|$))/i,
+    // Match ID in various formats: _ID_, ID(, ID_, IDspace, ID at end, or INDONESIA (with typo variants)
+    // Examples: "campaign_ID_data", "SKIN1004ID(1st)", "campaignID_official", "SKIN1004_INDONESIA_1ST", "SKIN1004_INDOENSIA_1ST"
+    pattern: /(?:_ID_|ID(?=[_\(\s]|$)|INDO[EN](?:E|N)SIA)/i,
   },
 ];
 

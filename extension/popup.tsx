@@ -13,7 +13,7 @@ import { buildCampaignUrl } from "./utils/url-builder";
 import { CampaignList } from "./components/CampaignList";
 import { SettingsView } from "./components/SettingsView";
 import type { Campaign, UploadStatus, RegionType, CampaignType } from "./types/campaign";
-import { mapParentFolderToRegion } from "./lib/parent-folder-mapper";
+import { mapParentFolderToRegion, getParentFolderIdForRegion } from "./lib/parent-folder-mapper";
 
 export default function URLReplacerPopup() {
   const [isLoading, setIsLoading] = React.useState(false);
@@ -239,7 +239,7 @@ export default function URLReplacerPopup() {
     }
   }, [isSettingsView]);
 
-  const saveCampaignData = (silent = false) => {
+  const saveCampaignData = async (silent = false) => {
     try {
       const parsedCampaigns = campaignDataText
         .split("\n")
@@ -421,7 +421,7 @@ export default function URLReplacerPopup() {
                 setEndMonth(endMonth);
                 setEndDay(endDay);
 
-                // Save to storage
+                // Save to storage IMMEDIATELY (no debounce) to prevent race conditions
                 const dateRange = {
                   startYear,
                   startMonth,
@@ -435,7 +435,8 @@ export default function URLReplacerPopup() {
 
                 localStorage.setItem(STORAGE_KEYS.DATE_RANGE, JSON.stringify(dateRange));
                 if (typeof chrome !== "undefined" && chrome.storage) {
-                  chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+                  // Await storage operation to ensure it completes before continuing
+                  await chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
                 }
 
                 toast.success(`Date range set: ${startMonth}/${startDay}/${startYear} - ${endMonth}/${endDay}/${endYear}`);
@@ -454,7 +455,9 @@ export default function URLReplacerPopup() {
 
       // Save campaigns to storage
       localStorage.setItem(STORAGE_KEYS.CAMPAIGN_DATA, JSON.stringify(parsedCampaigns));
-      chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_DATA]: parsedCampaigns });
+      if (typeof chrome !== "undefined" && chrome.storage) {
+        await chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_DATA]: parsedCampaigns });
+      }
 
       // Build and save region and type mappings for content.ts
       const campaignRegions: Record<string, RegionType> = {};
@@ -471,14 +474,18 @@ export default function URLReplacerPopup() {
 
       localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(campaignRegions));
       localStorage.setItem(STORAGE_KEYS.CAMPAIGN_TYPES, JSON.stringify(campaignTypes));
-      chrome.storage.local.set({
-        [STORAGE_KEYS.CAMPAIGN_REGIONS]: campaignRegions,
-        [STORAGE_KEYS.CAMPAIGN_TYPES]: campaignTypes
-      });
+      if (typeof chrome !== "undefined" && chrome.storage) {
+        await chrome.storage.local.set({
+          [STORAGE_KEYS.CAMPAIGN_REGIONS]: campaignRegions,
+          [STORAGE_KEYS.CAMPAIGN_TYPES]: campaignTypes
+        });
+      }
 
       setCurrentIndex(0);
       localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, "0");
-      chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: "0" });
+      if (typeof chrome !== "undefined" && chrome.storage) {
+        await chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: "0" });
+      }
 
       setLastSavedCampaignData(campaignDataText);
 
@@ -620,22 +627,33 @@ export default function URLReplacerPopup() {
 
     try {
       const campaign = campaigns[index];
-      const regionInfo = detectRegionFromCampaign(campaign.name);
-      if (!regionInfo) {
-        toast.error(`Could not detect region from campaign name: ${campaign.name}`);
+      
+      // Use configured region from campaign data (pasted from user)
+      const region = campaign.region;
+      if (!region) {
+        toast.error(`No region configured for campaign: ${campaign.name}`);
+        setIsLoading(false);
+        return;
+      }
+
+      // Get parent folder ID from configured region
+      const parentFolderId = getParentFolderIdForRegion(region);
+      
+      if (!parentFolderId) {
+        toast.error(`Invalid region configuration: ${region}`);
         setIsLoading(false);
         return;
       }
 
       toast.loading("Searching for campaign folder...");
 
-      const campaignFolderId = await findCampaignFolder(campaign.name, regionInfo.folderId);
+      const campaignFolderId = await findCampaignFolder(campaign.name, parentFolderId);
 
       toast.dismiss();
 
       if (!campaignFolderId) {
         toast.error(`Campaign folder not found. Opening region folder instead.`);
-        const googleDriveFolderUrl = `https://drive.google.com/drive/folders/${regionInfo.folderId}`;
+        const googleDriveFolderUrl = `https://drive.google.com/drive/folders/${parentFolderId}`;
 
         if (typeof chrome !== "undefined" && chrome.tabs) {
           await chrome.tabs.create({ url: googleDriveFolderUrl });
@@ -787,9 +805,38 @@ export default function URLReplacerPopup() {
       }
 
       setCampaignDataText(text);
-      // Trigger immediate save to parse and update campaigns
-      // The saveCampaignData function will show the success toast with the campaign count
-      setTimeout(() => saveCampaignData(false), 100);
+
+      // Extract dates from the first line of pasted data
+      const lines = text.split("\n").filter(line => line.trim());
+      if (lines.length > 0) {
+        const parts = lines[0].trim().split(/\s{2,}|\t+/);
+        const startDateStr = parts[2]?.trim();
+        const endDateStr = parts[3]?.trim();
+
+        // Parse dates and update date range state
+        if (startDateStr && endDateStr) {
+          try {
+            const startDate = new Date(startDateStr);
+            const endDate = new Date(endDateStr);
+
+            if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) {
+              setStartYear(startDate.getFullYear());
+              setStartMonth(startDate.getMonth() + 1);
+              setStartDay(startDate.getDate());
+              setEndYear(endDate.getFullYear());
+              setEndMonth(endDate.getMonth() + 1);
+              setEndDay(endDate.getDate());
+            }
+          } catch (e) {
+            console.error("Failed to parse dates from clipboard:", e);
+          }
+        }
+      }
+
+      // Wait a tick for state to update, then immediately save
+      // This ensures date range and all data is persisted before user can trigger workflows
+      await new Promise(resolve => setTimeout(resolve, 0));
+      await saveCampaignData(false);
     } catch (error) {
       console.error("Failed to read clipboard:", error);
       toast.error("Failed to paste from clipboard. Please grant clipboard permissions.");
@@ -840,6 +887,13 @@ export default function URLReplacerPopup() {
             onOpenSettings={() => setIsSettingsView(true)}
             onStartWorkflow={handleStartWorkflow}
             onPasteFromClipboard={handlePasteFromClipboard}
+            onClearAllData={clearAllData}
+            startYear={startYear}
+            startMonth={startMonth}
+            startDay={startDay}
+            endYear={endYear}
+            endMonth={endMonth}
+            endDay={endDay}
           />
         )}
       </div>

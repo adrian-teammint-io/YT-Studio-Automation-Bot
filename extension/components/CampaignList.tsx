@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Settings, Loader2, BadgeCheckIcon, RefreshCw, Play, Pause, Clipboard, MessageCircleQuestionIcon, Flower2Icon } from "lucide-react";
+import { Settings, Loader2, BadgeCheckIcon, RefreshCw, Play, Pause, Clipboard, MessageCircleQuestionIcon, Flower2Icon, Trash2 } from "lucide-react";
 import { CampaignItem } from "./CampaignItem";
 import { STORAGE_KEYS } from "../constants/storage";
 import type { Campaign, UploadStatus, RegionType, CampaignType } from "../types/campaign";
@@ -25,6 +25,13 @@ interface CampaignListProps {
   onOpenSettings: () => void;
   onStartWorkflow?: () => void;
   onPasteFromClipboard?: () => void;
+  onClearAllData?: () => void;
+  startYear: number;
+  startMonth: number;
+  startDay: number;
+  endYear: number;
+  endMonth: number;
+  endDay: number;
 }
 
 export function CampaignList({
@@ -41,6 +48,13 @@ export function CampaignList({
   onOpenSettings,
   onStartWorkflow,
   onPasteFromClipboard,
+  onClearAllData,
+  startYear,
+  startMonth,
+  startDay,
+  endYear,
+  endMonth,
+  endDay,
 }: CampaignListProps) {
   const [isWorkflowPaused, setIsWorkflowPaused] = React.useState(true);
   const completedCount = campaigns.filter(c => uploadStatuses.get(c.name)?.status === "success").length;
@@ -89,8 +103,8 @@ export function CampaignList({
               GMV 맥스 자동화 봇
             </h2>
             {version && (
-              <Badge variant="outline">
-                <BadgeCheckIcon className="size-4" />v{version}
+              <Badge variant="outline" className="border-2 border-black font-semibold">
+                <BadgeCheckIcon className="size-4" color="#f72585" />v{version}
               </Badge>
             )}
           </div>
@@ -124,6 +138,15 @@ export function CampaignList({
           <Button
             variant="outline"
             size="sm"
+            onClick={onClearAllData}
+            title="Clear all campaign data"
+            className="hover:bg-red-50"
+          >
+            <Trash2 className="h-4 w-4 text-red-600" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={onRefetch}
             disabled={isRefetching}
             title="Refetch upload statuses from Google Drive"
@@ -147,12 +170,20 @@ export function CampaignList({
           <Button
             onClick={handleStartPauseClick}
             disabled={!hasPendingCampaigns}
-            className={cn("w-[100px] h-12 px-4 border-black border-2 text-base font-semibold !cursor-pointer", isWorkflowPaused ? "bg-[#89fc00]" : "bg-[#ff2c55]")}
+            className={cn(
+              "w-[100px] h-12 px-4 border-black border-2 text-base font-semibold !cursor-pointer",
+              "shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all duration-150",
+              "hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-2px] hover:translate-y-[-2px]",
+              "active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px]",
+              "disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-[4px_4px_0px_0px_rgba(0,0,0,0.3)]",
+              "disabled:hover:translate-x-0 disabled:hover:translate-y-0",
+              isWorkflowPaused ? "bg-[#89fc00] hover:bg-[#9dff1a]" : "bg-[#ff2c55] hover:bg-[#ff4066]"
+            )}
           >
             {isWorkflowPaused ? (
-              <Play className="size-5 text-black" />
+              <Play className="size-5 text-black fill-black" />
             ) : (
-              <Pause className="size-5 text-black" />
+              <Pause className="size-5 text-black fill-black" />
             )}
           </Button>
           <div className="bg-black w-full h-[2px]" />
@@ -208,36 +239,29 @@ export function CampaignList({
                   // Extract unique regions and types
                   const regions = new Set<RegionType>();
                   const types = new Set<CampaignType>();
-                  let earliestDate: string | null = null;
-                  let latestDate: string | null = null;
 
                   allCampaigns.forEach(({ campaign }) => {
                     if (campaign.region) regions.add(campaign.region);
                     if (campaign.type) types.add(campaign.type);
-
-                    if (campaign.startDate) {
-                      if (!earliestDate || campaign.startDate < earliestDate) {
-                        earliestDate = campaign.startDate;
-                      }
-                    }
-                    if (campaign.endDate) {
-                      if (!latestDate || campaign.endDate > latestDate) {
-                        latestDate = campaign.endDate;
-                      }
-                    }
                   });
+
+                  // Format configured date range
+                  const formatDate = (year: number, month: number, day: number) => {
+                    return `${String(day).padStart(2, '0')}-${String(month).padStart(2, '0')}`;
+                  };
+
+                  const configuredStartDate = formatDate(startYear, startMonth, startDay);
+                  const configuredEndDate = formatDate(endYear, endMonth, endDay);
 
                   return (
                     <div className="flex flex-wrap items-center gap-2 px-1 pb-2">
                       <Flower2Icon color="red" className="size-6" />
                       {/* Date Range */}
-                      {earliestDate && latestDate && (
-                        <div className="flex items-center gap-1">
-                          <Badge className="font-medium">{earliestDate}</Badge>
-                          <span>→</span>
-                          <Badge className="font-medium">{latestDate}</Badge>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-1">
+                        <Badge className="font-medium">{configuredStartDate}</Badge>
+                        <span>→</span>
+                        <Badge className="font-medium">{configuredEndDate}</Badge>
+                      </div>
 
                       {/* Regions */}
                       {Array.from(regions).sort().map((region) => {
@@ -301,9 +325,9 @@ export function CampaignList({
         </div>
       ) : (
         <div className="py-12 text-center">
-          <Button onClick={onOpenSettings} variant="default">
-            <Settings className="mr-2 h-4 w-4" />
-            캠페인 설정
+          <Button onClick={onPasteFromClipboard} variant="default">
+            <Clipboard className="mr-2 h-4 w-4" />
+            클립보드에서 붙여넣기
           </Button>
         </div>
       )}
