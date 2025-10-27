@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { POPUP_WIDTH } from "./constants/ui";
 import { STORAGE_KEYS } from "./constants/storage";
-import { LIVE_CAMPAIGNS } from "./constants/regions";
+import { LIVE_CAMPAIGNS } from "../lib/live_campaigns";
 import { detectRegionFromCampaign } from "./utils/region-detector";
 import { findCampaignFolder } from "./services/google-drive";
 import { regionDateToTimestamp } from "./utils/date-utils";
@@ -13,6 +13,7 @@ import { buildCampaignUrl } from "./utils/url-builder";
 import { CampaignList } from "./components/CampaignList";
 import { SettingsView } from "./components/SettingsView";
 import type { Campaign, UploadStatus, RegionType, CampaignType } from "./types/campaign";
+import { mapParentFolderToRegion } from "./lib/parent-folder-mapper";
 
 export default function URLReplacerPopup() {
   const [isLoading, setIsLoading] = React.useState(false);
@@ -91,7 +92,7 @@ export default function URLReplacerPopup() {
           const data = JSON.parse(storedCampaignData);
           setCampaigns(data);
           setCampaignDataText(data.map((c: Campaign) =>
-            `${c.name}    ${c.id}${c.region ? `    ${c.region}` : ""}${c.type ? `    ${c.type}` : ""}`
+            `${c.name}    ${c.id}    ${c.startDate || ""}    ${c.endDate || ""}    ${c.parentFolder || ""}    ${c.folderId || ""}    ${c.region || ""}    ${c.type || ""}`
           ).join("\n"));
         }
 
@@ -246,15 +247,92 @@ export default function URLReplacerPopup() {
         .map(line => {
           const parts = line.trim().split(/\s{2,}|\t+/);
           if (parts.length >= 2) {
-            const campaign: Campaign = {
-              name: parts[0].trim(),
-              id: parts[1].trim(),
-            };
-            if (parts[2]?.trim()) {
-              campaign.region = parts[2].trim() as RegionType;
+            const name = parts[0]?.trim() || "";
+            const id = parts[1]?.trim() || "";
+
+            // Skip campaigns with empty name or ID
+            if (!name || !id) {
+              console.warn(`[Popup] Skipping campaign with empty name or ID:`, { name, id });
+              return null;
             }
-            if (parts[3]?.trim()) {
-              campaign.type = parts[3].trim() as CampaignType;
+
+            const campaign: Campaign = {
+              name,
+              id,
+            };
+
+            // New format: name | id | startDate | endDate | parentFolder | folderId | region | type
+            // Old format: name | id | region | type
+            // Detect format based on number of parts
+            if (parts.length >= 6) {
+              // New format with dates and folder info
+              if (parts[2]?.trim()) {
+                campaign.startDate = parts[2].trim();
+                console.log(`[Popup] Campaign "${name}" - startDate extracted: "${campaign.startDate}"`);
+              }
+              if (parts[3]?.trim()) {
+                campaign.endDate = parts[3].trim();
+                console.log(`[Popup] Campaign "${name}" - endDate extracted: "${campaign.endDate}"`);
+              }
+              if (parts[4]?.trim()) {
+                campaign.parentFolder = parts[4].trim();
+              }
+              if (parts[5]?.trim()) {
+                campaign.folderId = parts[5].trim();
+              }
+              if (parts[6]?.trim()) {
+                campaign.region = parts[6].trim() as RegionType;
+              }
+              if (parts[7]?.trim()) {
+                campaign.type = parts[7].trim() as CampaignType;
+              }
+            } else {
+              // Old format (backward compatibility)
+              if (parts[2]?.trim()) {
+                campaign.region = parts[2].trim() as RegionType;
+              }
+              if (parts[3]?.trim()) {
+                campaign.type = parts[3].trim() as CampaignType;
+              }
+            }
+
+            // Auto-detect region: prioritize parent folder name, fallback to campaign name
+            if (!campaign.region) {
+              // First, try to extract region from parent folder name
+              if (campaign.parentFolder) {
+                const regionFromFolder = mapParentFolderToRegion(campaign.parentFolder);
+                if (regionFromFolder) {
+                  campaign.region = regionFromFolder;
+                  console.log(`[Popup] Region detected from parent folder "${campaign.parentFolder}": ${regionFromFolder}`);
+                }
+              }
+
+              // Fallback: detect from campaign name if parent folder didn't work
+              if (!campaign.region) {
+                const regionInfo = detectRegionFromCampaign(campaign.name);
+                if (regionInfo) {
+                  const regionMap: Record<string, RegionType> = {
+                    "2.WEST_US": "US",
+                    "1.EAST_PH": "PH",
+                    "1.EAST_MY": "MY",
+                    "1.EAST_ID": "ID"
+                  };
+                  campaign.region = regionMap[regionInfo.region] || "US";
+                  console.log(`[Popup] Region detected from campaign name "${campaign.name}": ${campaign.region}`);
+                }
+              }
+            }
+
+            // Auto-detect type from LIVE_CAMPAIGNS if not provided
+            if (!campaign.type) {
+              const isLive = LIVE_CAMPAIGNS.some(lc => {
+                // Match by name if ID is empty in the list, otherwise match both name and ID
+                if (!lc.id || lc.id === "") {
+                  return lc.name === campaign.name;
+                }
+                return lc.name === campaign.name && lc.id === campaign.id;
+              });
+              campaign.type = isLive ? "LIVE" : "PRODUCT";
             }
             return campaign;
           }
@@ -264,8 +342,139 @@ export default function URLReplacerPopup() {
 
       setCampaigns(parsedCampaigns);
 
+      // Auto-set date range from first campaign with valid dates (only if not in silent mode)
+      if (!silent && parsedCampaigns.length > 0) {
+        const firstCampaignWithDates = parsedCampaigns.find(c => c.startDate && c.endDate);
+
+        if (firstCampaignWithDates && firstCampaignWithDates.startDate && firstCampaignWithDates.endDate) {
+          try {
+            console.log(`[Popup] Raw dates from campaign:`, {
+              startDate: firstCampaignWithDates.startDate,
+              endDate: firstCampaignWithDates.endDate,
+              campaignName: firstCampaignWithDates.name
+            });
+
+            // Parse dates - support both YYYY-MM-DD and DD-MM-YYYY formats
+            const startParts = firstCampaignWithDates.startDate.trim().split(/[-/]/);
+            const endParts = firstCampaignWithDates.endDate.trim().split(/[-/]/);
+
+            console.log(`[Popup] Split date parts:`, {
+              startParts,
+              endParts
+            });
+
+            if (startParts.length === 3 && endParts.length === 3) {
+              let startYear: number, startMonth: number, startDay: number;
+              let endYear: number, endMonth: number, endDay: number;
+
+              // Detect format: if first part is 4 digits, it's YYYY-MM-DD, otherwise DD-MM-YYYY
+              if (startParts[0].length === 4) {
+                // YYYY-MM-DD format
+                startYear = parseInt(startParts[0], 10);
+                startMonth = parseInt(startParts[1], 10);
+                startDay = parseInt(startParts[2], 10);
+
+                endYear = parseInt(endParts[0], 10);
+                endMonth = parseInt(endParts[1], 10);
+                endDay = parseInt(endParts[2], 10);
+
+                console.log(`[Popup] Detected YYYY-MM-DD format`);
+              } else if (startParts[2].length === 4) {
+                // DD-MM-YYYY format
+                startDay = parseInt(startParts[0], 10);
+                startMonth = parseInt(startParts[1], 10);
+                startYear = parseInt(startParts[2], 10);
+
+                endDay = parseInt(endParts[0], 10);
+                endMonth = parseInt(endParts[1], 10);
+                endYear = parseInt(endParts[2], 10);
+
+                console.log(`[Popup] Detected DD-MM-YYYY format`);
+              } else {
+                console.warn("[Popup] Unable to detect date format");
+                return;
+              }
+
+              console.log(`[Popup] Parsed date values:`, {
+                start: { year: startYear, month: startMonth, day: startDay },
+                end: { year: endYear, month: endMonth, day: endDay }
+              });
+
+              // Validate dates
+              if (
+                !isNaN(startYear) && !isNaN(startMonth) && !isNaN(startDay) &&
+                !isNaN(endYear) && !isNaN(endMonth) && !isNaN(endDay) &&
+                startYear >= 2020 && startYear <= 2100 &&
+                startMonth >= 1 && startMonth <= 12 &&
+                startDay >= 1 && startDay <= 31 &&
+                endYear >= 2020 && endYear <= 2100 &&
+                endMonth >= 1 && endMonth <= 12 &&
+                endDay >= 1 && endDay <= 31
+              ) {
+                console.log(`[Popup] ✅ Date validation passed, setting state values`);
+
+                // Set state values directly - NO Date object creation to avoid timezone issues
+                setStartYear(startYear);
+                setStartMonth(startMonth);
+                setStartDay(startDay);
+                setEndYear(endYear);
+                setEndMonth(endMonth);
+                setEndDay(endDay);
+
+                // Save to storage
+                const dateRange = {
+                  startYear,
+                  startMonth,
+                  startDay,
+                  endYear,
+                  endMonth,
+                  endDay,
+                };
+
+                console.log(`[Popup] Saving date range to storage:`, dateRange);
+
+                localStorage.setItem(STORAGE_KEYS.DATE_RANGE, JSON.stringify(dateRange));
+                if (typeof chrome !== "undefined" && chrome.storage) {
+                  chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+                }
+
+                toast.success(`Date range set: ${startMonth}/${startDay}/${startYear} - ${endMonth}/${endDay}/${endYear}`);
+              } else {
+                console.warn("[Popup] ❌ Invalid date values extracted:", {
+                  start: { year: startYear, month: startMonth, day: startDay },
+                  end: { year: endYear, month: endMonth, day: endDay }
+                });
+              }
+            }
+          } catch (error) {
+            console.error("[Popup] Failed to parse campaign dates:", error);
+          }
+        }
+      }
+
+      // Save campaigns to storage
       localStorage.setItem(STORAGE_KEYS.CAMPAIGN_DATA, JSON.stringify(parsedCampaigns));
       chrome.storage.local.set({ [STORAGE_KEYS.CAMPAIGN_DATA]: parsedCampaigns });
+
+      // Build and save region and type mappings for content.ts
+      const campaignRegions: Record<string, RegionType> = {};
+      const campaignTypes: Record<string, CampaignType> = {};
+
+      parsedCampaigns.forEach(campaign => {
+        if (campaign.region) {
+          campaignRegions[campaign.id] = campaign.region;
+        }
+        if (campaign.type) {
+          campaignTypes[campaign.id] = campaign.type;
+        }
+      });
+
+      localStorage.setItem(STORAGE_KEYS.CAMPAIGN_REGIONS, JSON.stringify(campaignRegions));
+      localStorage.setItem(STORAGE_KEYS.CAMPAIGN_TYPES, JSON.stringify(campaignTypes));
+      chrome.storage.local.set({
+        [STORAGE_KEYS.CAMPAIGN_REGIONS]: campaignRegions,
+        [STORAGE_KEYS.CAMPAIGN_TYPES]: campaignTypes
+      });
 
       setCurrentIndex(0);
       localStorage.setItem(STORAGE_KEYS.CURRENT_INDEX, "0");
@@ -273,7 +482,7 @@ export default function URLReplacerPopup() {
 
       setLastSavedCampaignData(campaignDataText);
 
-      if (!silent) {
+      if (!silent && parsedCampaigns.length > 0) {
         toast.success(`Campaign data saved (${parsedCampaigns.length} campaigns)`);
       }
     } catch (error) {
@@ -569,6 +778,24 @@ export default function URLReplacerPopup() {
     }
   };
 
+  const handlePasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) {
+        toast.error("Clipboard is empty");
+        return;
+      }
+
+      setCampaignDataText(text);
+      // Trigger immediate save to parse and update campaigns
+      // The saveCampaignData function will show the success toast with the campaign count
+      setTimeout(() => saveCampaignData(false), 100);
+    } catch (error) {
+      console.error("Failed to read clipboard:", error);
+      toast.error("Failed to paste from clipboard. Please grant clipboard permissions.");
+    }
+  };
+
   return (
     <div className="bg-white" style={{ width: POPUP_WIDTH, height: "300px" }}>
       <Toaster duration={1500} position="top-center" />
@@ -612,6 +839,7 @@ export default function URLReplacerPopup() {
             onRefetch={handleRefetch}
             onOpenSettings={() => setIsSettingsView(true)}
             onStartWorkflow={handleStartWorkflow}
+            onPasteFromClipboard={handlePasteFromClipboard}
           />
         )}
       </div>

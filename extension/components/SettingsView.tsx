@@ -31,6 +31,21 @@ interface SettingsViewProps {
   onBack: () => void;
 }
 
+function parseDateToComponents(dateStr: string): { year: number; month: number; day: number } | null {
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return null;
+
+    return {
+      year: date.getFullYear(),
+      month: date.getMonth() + 1, // getMonth() returns 0-11
+      day: date.getDate()
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function SettingsView({
   campaignDataText,
   lastSavedCampaignData,
@@ -55,6 +70,23 @@ export function SettingsView({
   onClearAllData,
   onBack,
 }: SettingsViewProps) {
+  const handleDatesExtracted = (startDate: string, endDate: string) => {
+    const start = parseDateToComponents(startDate);
+    const end = parseDateToComponents(endDate);
+
+    if (start) {
+      onStartYearChange(start.year);
+      onStartMonthChange(start.month);
+      onStartDayChange(start.day);
+    }
+
+    if (end) {
+      onEndYearChange(end.year);
+      onEndMonthChange(end.month);
+      onEndDayChange(end.day);
+    }
+  };
+
   return (
     <>
       <div className="flex items-center justify-between">
@@ -76,12 +108,37 @@ export function SettingsView({
         </Button>
       </div>
 
+
+      {/* Date Range Input */}
+      <DateRangePicker
+        startYear={startYear}
+        startMonth={startMonth}
+        startDay={startDay}
+        endYear={endYear}
+        endMonth={endMonth}
+        endDay={endDay}
+        onStartYearChange={onStartYearChange}
+        onStartMonthChange={onStartMonthChange}
+        onStartDayChange={onStartDayChange}
+        onEndYearChange={onEndYearChange}
+        onEndMonthChange={onEndMonthChange}
+        onEndDayChange={onEndDayChange}
+        onSetToday={onSetToday}
+        onSetYesterday={onSetYesterday}
+        onSetLast7Days={onSetLast7Days}
+        onSetLast30Days={onSetLast30Days}
+        isLoading={isLoading}
+      />
+
+      <div className="h-[1px] w-full bg-black" />
+
       <div className="space-y-6">
         {/* Campaign Data Input */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label htmlFor="campaign-data" className="font-bold text-xl text-foreground">
-              1. Campaign Name & ID
+              {/* Campaign Name & ID */}
+              캠페인 이름 및 ID
             </label>
             {campaignDataText.trim() && lastSavedCampaignData === campaignDataText && (
               <div className="flex items-center gap-1 text-xs text-green-600">
@@ -94,29 +151,9 @@ export function SettingsView({
             value={campaignDataText}
             onChange={onCampaignDataChange}
             disabled={isLoading}
+            onDatesExtracted={handleDatesExtracted}
           />
         </div>
-
-        {/* Date Range Input */}
-        <DateRangePicker
-          startYear={startYear}
-          startMonth={startMonth}
-          startDay={startDay}
-          endYear={endYear}
-          endMonth={endMonth}
-          endDay={endDay}
-          onStartYearChange={onStartYearChange}
-          onStartMonthChange={onStartMonthChange}
-          onStartDayChange={onStartDayChange}
-          onEndYearChange={onEndYearChange}
-          onEndMonthChange={onEndMonthChange}
-          onEndDayChange={onEndDayChange}
-          onSetToday={onSetToday}
-          onSetYesterday={onSetYesterday}
-          onSetLast7Days={onSetLast7Days}
-          onSetLast30Days={onSetLast30Days}
-          isLoading={isLoading}
-        />
       </div>
     </>
   );

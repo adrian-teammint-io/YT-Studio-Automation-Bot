@@ -14,7 +14,8 @@ import { createJWTAssertion, getAccessTokenFromJWT } from "../utils/jwt";
 
 export interface GoogleDriveConfig {
   parentFolderId: string;
-  campaignFolderName: string;
+  campaignFolderName?: string; // Optional: folder name to create/find
+  folderId?: string; // Optional: direct folder ID to upload to (skips folder creation)
   fileName: string;
   fileBlob: Blob;
   // Optional validation params - if provided, will verify file matches these values
@@ -657,17 +658,29 @@ export async function uploadToGoogleDrive(config: GoogleDriveConfig): Promise<Up
     // Extract the driveId for use in subsequent operations
     const driveId = accessCheck.details?.driveId || null;
 
-    // Get or create campaign folder
-    console.log("[Google Drive] STEP 1/2: Creating/finding campaign folder");
-    console.log("[Google Drive] - Region parent:", config.parentFolderId);
-    console.log("[Google Drive] - Campaign name:", config.campaignFolderName);
-    console.log("[Google Drive] - Shared Drive ID:", driveId || "N/A (My Drive)");
+    // Determine target folder ID
+    let campaignFolderId: string;
 
-    const campaignFolderId = await getOrCreateFolder(
-      token,
-      config.campaignFolderName,
-      config.parentFolderId
-    );
+    if (config.folderId) {
+      // Use provided folder ID directly
+      console.log("[Google Drive] STEP 1/2: Using provided folder ID");
+      console.log("[Google Drive] - Folder ID:", config.folderId);
+      campaignFolderId = config.folderId;
+    } else if (config.campaignFolderName) {
+      // Get or create campaign folder by name
+      console.log("[Google Drive] STEP 1/2: Creating/finding campaign folder");
+      console.log("[Google Drive] - Region parent:", config.parentFolderId);
+      console.log("[Google Drive] - Campaign name:", config.campaignFolderName);
+      console.log("[Google Drive] - Shared Drive ID:", driveId || "N/A (My Drive)");
+
+      campaignFolderId = await getOrCreateFolder(
+        token,
+        config.campaignFolderName,
+        config.parentFolderId
+      );
+    } else {
+      throw new Error("Either folderId or campaignFolderName must be provided");
+    }
 
     console.log("[Google Drive] ✅ STEP 1/2 COMPLETE");
     console.log("[Google Drive] - Campaign folder ID:", campaignFolderId);

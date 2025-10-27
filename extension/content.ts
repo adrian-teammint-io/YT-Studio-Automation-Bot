@@ -125,6 +125,19 @@ async function getCampaignName(campaignId: string): Promise<string | null> {
 }
 
 /**
+ * Get full campaign object by ID from storage
+ */
+async function getCampaignById(campaignId: string): Promise<any | null> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["gmv_max_campaign_data"], (result) => {
+      const campaigns = result.gmv_max_campaign_data || [];
+      const campaign = campaigns.find((c: { id: string }) => c.id === campaignId);
+      resolve(campaign || null);
+    });
+  });
+}
+
+/**
  * Detect and upload the most recently downloaded file
  * Sends request to background script which has access to downloads API
  * Includes deduplication to prevent multiple uploads
@@ -148,22 +161,38 @@ async function detectAndUploadDownloadedFile(): Promise<void> {
       return;
     }
 
-    const campaignName = await getCampaignName(campaignId);
-    if (!campaignName) {
-      console.warn("[GMV Max Navigator] No campaign name found for ID:", campaignId);
+    const campaign = await getCampaignById(campaignId);
+    if (!campaign) {
+      console.warn("[GMV Max Navigator] No campaign found for ID:", campaignId);
       uploadInProgress = false;
       return;
     }
 
-    console.log("[GMV Max Navigator] Campaign info:", { campaignId, campaignName });
+    console.log("[GMV Max Navigator] Campaign info:", campaign);
+
+    // Validate campaign has name and ID
+    if (!campaign.name || campaign.name.trim() === "") {
+      console.error("[GMV Max Navigator] Campaign has empty name:", campaign);
+      alert(`Campaign ID ${campaignId} has an empty name. Please fix your campaign data in the extension settings.`);
+      uploadInProgress = false;
+      return;
+    }
+
+    if (!campaign.id || campaign.id.trim() === "") {
+      console.error("[GMV Max Navigator] Campaign has empty ID:", campaign);
+      alert(`Campaign "${campaign.name}" has an empty ID. Please fix your campaign data in the extension settings.`);
+      uploadInProgress = false;
+      return;
+    }
 
     // Send request to background script to handle download detection and upload
     console.log("[GMV Max Navigator] Requesting background script to check downloads...");
     chrome.runtime.sendMessage(
       {
         type: "CHECK_AND_UPLOAD_DOWNLOAD",
-        campaignName: campaignName,
-        campaignId: campaignId,
+        campaignName: campaign.name,
+        campaignId: campaign.id,
+        folderId: campaign.folderId, // Pass folder ID if available
       },
       (response) => {
         if (chrome.runtime.lastError) {

@@ -1,5 +1,7 @@
 const path = require("path");
 const CopyPlugin = require("copy-webpack-plugin");
+const webpack = require("webpack");
+require("dotenv").config();
 
 module.exports = (env, argv) => {
   const isProduction = argv.mode === "production";
@@ -51,6 +53,14 @@ module.exports = (env, argv) => {
         { from: "public/icon128.png", to: "icon128.png" },
         { from: "public/google-sheets-icon.png", to: "google-sheets-icon.png" },
       ],
+    }),
+    new webpack.DefinePlugin({
+      "process.env.NEXT_PUBLIC_SUPABASE_URL": JSON.stringify(
+        process.env.NEXT_PUBLIC_SUPABASE_URL
+      ),
+      "process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY": JSON.stringify(
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      ),
     }),
   ],
   };

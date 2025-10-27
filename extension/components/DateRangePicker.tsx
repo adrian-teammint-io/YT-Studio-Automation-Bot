@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Button } from "@/components/ui/button";
-import { AudioWaveformIcon } from "lucide-react";
+import { ArrowBigRightIcon, AudioWaveformIcon } from "lucide-react";
 
 interface DateRangePickerProps {
   startYear: number;
@@ -47,7 +47,8 @@ export function DateRangePicker({
     <div className="space-y-3 flex flex-col gap-2">
       <div className="flex items-center justify-between">
         <label className="font-bold text-xl text-foreground">
-          2. Date Range
+          {/* Date Range */}
+          날짜 범위
         </label>
         <div className="flex gap-2">
           <Button
@@ -136,7 +137,7 @@ export function DateRangePicker({
           </div>
         </div>
 
-        <div className="flex items-center justify-center"><AudioWaveformIcon className="size-8" /></div>
+        <div className="flex items-center justify-center"><ArrowBigRightIcon className="size-5" /></div>
 
         {/* End Date */}
         <div className="space-y-2">

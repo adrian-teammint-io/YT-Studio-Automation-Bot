@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2 } from "lucide-react";
 import { detectRegionFromCampaign } from "../utils/region-detector";
-import { LIVE_CAMPAIGNS } from "../constants/regions";
+import { LIVE_CAMPAIGNS } from "../../lib/live_campaigns";
+import { mapParentFolderToRegion } from "../lib/parent-folder-mapper";
 import type { RegionType, CampaignType } from "../types/campaign";
 
 interface CampaignRow {
@@ -14,19 +15,49 @@ interface CampaignRow {
   campaignId: string;
   region: RegionType;
   type: CampaignType;
+  startDate: string;
+  endDate: string;
+  parentFolder: string;
+  folderId: string;
 }
 
 interface CampaignInputProps {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  onDatesExtracted?: (startDate: string, endDate: string) => void;
 }
 
-export function CampaignInput({ value, onChange, disabled = false }: CampaignInputProps) {
+export function CampaignInput({ value, onChange, disabled = false, onDatesExtracted }: CampaignInputProps) {
   const [rows, setRows] = React.useState<CampaignRow[]>([]);
 
-  // Helper function to detect region from campaign name
-  const detectRegion = (name: string): RegionType => {
+  // Helper function to parse date from various formats
+  const parseDate = (dateStr: string): string => {
+    if (!dateStr) return "";
+
+    // Try to parse dates like "Oct 23, 2025" or other common formats
+    try {
+      const date = new Date(dateStr);
+      if (!isNaN(date.getTime())) {
+        return date.toISOString().split('T')[0]; // Returns YYYY-MM-DD
+      }
+    } catch (e) {
+      // If parsing fails, return as-is
+    }
+    return dateStr;
+  };
+
+  // Helper function to detect region from parent folder or campaign name
+  const detectRegion = (parentFolder: string, name: string): RegionType => {
+    // First priority: use parent folder if available
+    if (parentFolder && parentFolder.trim()) {
+      const regionFromFolder = mapParentFolderToRegion(parentFolder);
+      if (regionFromFolder) {
+        return regionFromFolder;
+      }
+    }
+
+    // Fallback: detect from campaign name
     const regionInfo = detectRegionFromCampaign(name);
     if (regionInfo) {
       const regionMap: Record<string, RegionType> = {
@@ -42,7 +73,13 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
 
   // Helper function to detect type from campaign info
   const detectType = (name: string, id: string): CampaignType => {
-    const isLive = LIVE_CAMPAIGNS.some(lc => lc.name === name && lc.id === id);
+    const isLive = LIVE_CAMPAIGNS.some(lc => {
+      // Match by name if ID is empty in the list, otherwise match both name and ID
+      if (!lc.id || lc.id === "") {
+        return lc.name === name;
+      }
+      return lc.name === name && lc.id === id;
+    });
     return isLive ? "LIVE" : "PRODUCT";
   };
 
@@ -55,8 +92,12 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
         const parts = line.trim().split(/\s{2,}|\t+/);
         const name = parts[0]?.trim() || "";
         const campaignId = parts[1]?.trim() || "";
-        const region = (parts[2]?.trim() as RegionType) || detectRegion(name);
-        const type = (parts[3]?.trim() as CampaignType) || detectType(name, campaignId);
+        const startDate = parts[2] ? parseDate(parts[2].trim()) : "";
+        const endDate = parts[3] ? parseDate(parts[3].trim()) : "";
+        const parentFolder = parts[4]?.trim() || "";
+        const folderId = parts[5]?.trim() || "";
+        const region = detectRegion(parentFolder, name);
+        const type = detectType(name, campaignId);
 
         return {
           id: `row-${index}`,
@@ -64,6 +105,10 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
           campaignId,
           region,
           type,
+          startDate,
+          endDate,
+          parentFolder,
+          folderId,
         };
       });
 
@@ -72,7 +117,11 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
       name: "",
       campaignId: "",
       region: "US",
-      type: "PRODUCT"
+      type: "PRODUCT",
+      startDate: "",
+      endDate: "",
+      parentFolder: "",
+      folderId: ""
     }]);
   }, [value]);
 
@@ -80,17 +129,17 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
   const rowsToString = (updatedRows: CampaignRow[]) => {
     return updatedRows
       .filter(row => row.name.trim() || row.campaignId.trim())
-      .map(row => `${row.name}    ${row.campaignId}    ${row.region}    ${row.type}`)
+      .map(row => `${row.name}    ${row.campaignId}    ${row.startDate}    ${row.endDate}    ${row.parentFolder}    ${row.folderId}    ${row.region}    ${row.type}`)
       .join("\n");
   };
 
   const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>, rowId: string, field: "name" | "campaignId") => {
     const pastedText = e.clipboardData.getData("text");
 
-    // Check if pasted text contains multiple lines
+    // Check if pasted text contains multiple lines or multiple tab-separated fields
     const lines = pastedText.split("\n").filter(line => line.trim());
 
-    if (lines.length > 1) {
+    if (lines.length > 1 || pastedText.includes("\t")) {
       e.preventDefault();
 
       // Parse all lines with auto-detection
@@ -98,13 +147,26 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
         const parts = line.trim().split(/\s{2,}|\t+/);
         const name = parts[0]?.trim() || "";
         const campaignId = parts[1]?.trim() || "";
+        const startDate = parts[2] ? parseDate(parts[2].trim()) : "";
+        const endDate = parts[3] ? parseDate(parts[3].trim()) : "";
+        const parentFolder = parts[4]?.trim() || "";
+        const folderId = parts[5]?.trim() || "";
+
+        // Extract dates from first row and notify parent
+        if (index === 0 && onDatesExtracted && startDate && endDate) {
+          onDatesExtracted(startDate, endDate);
+        }
 
         return {
           id: `row-${Date.now()}-${index}`,
           name,
           campaignId,
-          region: detectRegion(name),
+          region: detectRegion(parentFolder, name),
           type: detectType(name, campaignId),
+          startDate,
+          endDate,
+          parentFolder,
+          folderId,
         };
       });
 
@@ -123,18 +185,20 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
     }
   };
 
-  const updateRow = (rowId: string, field: "name" | "campaignId" | "region" | "type", value: string) => {
+  const updateRow = (rowId: string, field: keyof Omit<CampaignRow, "id">, value: string) => {
     const updatedRows = rows.map(row => {
       if (row.id !== rowId) return row;
 
       const updated = { ...row, [field]: value };
 
-      // Auto-update region and type when name or campaignId changes
+      // Auto-update region and type when relevant fields change
       if (field === "name") {
-        updated.region = detectRegion(value);
+        updated.region = detectRegion(row.parentFolder, value);
         updated.type = detectType(value, row.campaignId);
       } else if (field === "campaignId") {
         updated.type = detectType(row.name, value);
+      } else if (field === "parentFolder") {
+        updated.region = detectRegion(value, row.name);
       }
 
       return updated;
@@ -150,6 +214,10 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
       campaignId: "",
       region: "US",
       type: "PRODUCT",
+      startDate: "",
+      endDate: "",
+      parentFolder: "",
+      folderId: "",
     };
     const updatedRows = [...rows, newRow];
     setRows(updatedRows);
@@ -163,7 +231,11 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
         name: "",
         campaignId: "",
         region: "US" as RegionType,
-        type: "PRODUCT" as CampaignType
+        type: "PRODUCT" as CampaignType,
+        startDate: "",
+        endDate: "",
+        parentFolder: "",
+        folderId: ""
       }];
       setRows(updatedRows);
       onChange("");
@@ -176,6 +248,10 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
 
   return (
     <div className="space-y-2">
+      <div className="text-muted-foreground">
+        {rows.filter(row => row.name.trim() || row.campaignId.trim()).length} campaigns
+      </div>
+
       <div className="border border-border rounded-md overflow-hidden">
         <table className="w-full">
           <thead className="bg-muted/50">
@@ -269,10 +345,6 @@ export function CampaignInput({ value, onChange, disabled = false }: CampaignInp
         <Plus className="size-4 mr-2" />
         Add Campaign
       </Button>
-
-      <div className="text-xs text-muted-foreground">
-        {rows.filter(row => row.name.trim() || row.campaignId.trim()).length} campaigns
-      </div>
     </div>
   );
 }

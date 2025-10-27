@@ -46,3 +46,26 @@ export function getBadgeStyle(backgroundColor: string) {
     color: luminance > 0.5 ? '#000000' : '#ffffff',
   };
 }
+
+/**
+ * Extract region code from parent folder name
+ * Examples: "2.WEST_US" -> "US", "1.EAST_PH" -> "PH"
+ */
+export function extractRegionFromFolder(parentFolder: string): RegionType | null {
+  const match = parentFolder.match(/(US|PH|ID|MY)$/i);
+  if (match) {
+    const region = match[1].toUpperCase();
+    if (region === 'US' || region === 'PH' || region === 'ID' || region === 'MY') {
+      return region as RegionType;
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract campaign type from campaign name
+ * If campaign name contains "LIVE", return "LIVE", otherwise "PRODUCT"
+ */
+export function extractTypeFromCampaign(campaignName: string): CampaignType {
+  return /LIVE/i.test(campaignName) ? "LIVE" : "PRODUCT";
+}

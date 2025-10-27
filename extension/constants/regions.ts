@@ -26,8 +26,3 @@ export const REGION_CONFIG = {
 } as const;
 
 export const BASE_URL = "https://ads.tiktok.com/i18n/gmv-max/dashboard/product";
-
-export const LIVE_CAMPAIGNS = [
-  { name: "SKIN1004MY(1st)", id: "1842021739590817" },
-  { name: "skin1004my_official_250909", id: "1842771753445410" }
-];

@@ -3,6 +3,10 @@ export interface Campaign {
   id: string;
   region?: "PH" | "US" | "ID" | "MY";
   type?: "PRODUCT" | "LIVE";
+  startDate?: string;
+  endDate?: string;
+  parentFolder?: string;
+  folderId?: string;
 }
 
 export interface UploadStatus {

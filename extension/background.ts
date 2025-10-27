@@ -13,6 +13,7 @@ interface UploadRequest {
   campaignName: string;
   fileName: string;
   fileUrl: string;
+  folderId?: string; // Optional: direct folder ID to upload to
 }
 
 interface UploadStatusMessage {
@@ -43,9 +44,9 @@ function updateBadge() {
  * Orchestrates region detection, file download, and Drive upload
  */
 async function handleFileUpload(request: UploadRequest): Promise<void> {
-  const { campaignName, fileName, fileUrl } = request;
+  const { campaignName, fileName, fileUrl, folderId } = request;
 
-  console.log("[Background] Starting file upload process:", { campaignName, fileName });
+  console.log("[Background] Starting file upload process:", { campaignName, fileName, folderId });
 
   // Send "started" status to popup
   broadcastUploadStatus({
@@ -55,13 +56,22 @@ async function handleFileUpload(request: UploadRequest): Promise<void> {
   });
 
   try {
-    // Step 1: Detect region from campaign name
-    const regionInfo = detectRegionFromCampaign(campaignName);
-    if (!regionInfo) {
-      throw new Error(`Could not detect region from campaign name: ${campaignName}`);
-    }
+    // Step 1: Detect region from campaign name (if folder ID not provided)
+    let parentFolderId: string;
 
-    console.log("[Background] Region detected:", regionInfo);
+    if (folderId) {
+      // Use provided folder ID directly
+      console.log("[Background] Using provided folder ID:", folderId);
+      parentFolderId = ""; // Not needed when using direct folderId
+    } else {
+      // Detect region from campaign name
+      const regionInfo = detectRegionFromCampaign(campaignName);
+      if (!regionInfo) {
+        throw new Error(`Could not detect region from campaign name: ${campaignName}`);
+      }
+      console.log("[Background] Region detected:", regionInfo);
+      parentFolderId = regionInfo.folderId;
+    }
 
     // Step 2: Download the file as a Blob
     console.log("[Background] Downloading file from:", fileUrl);
@@ -74,8 +84,8 @@ async function handleFileUpload(request: UploadRequest): Promise<void> {
 
     // Step 3: Upload to Google Drive
     const uploadConfig: GoogleDriveConfig = {
-      parentFolderId: regionInfo.folderId,
-      campaignFolderName: campaignName,
+      parentFolderId: folderId || parentFolderId,
+      ...(folderId ? { folderId } : { campaignFolderName: campaignName }),
       fileName: fileName,
       fileBlob: fileBlob,
     };
@@ -132,40 +142,65 @@ function broadcastUploadStatus(message: UploadStatusMessage): void {
 /**
  * Check recent downloads and trigger upload
  */
-async function checkAndUploadDownload(campaignName: string, campaignId: string): Promise<void> {
-  console.log("[Background] Checking recent downloads for campaign:", campaignName);
+async function checkAndUploadDownload(campaignName: string, campaignId: string, folderId?: string): Promise<void> {
+  console.log("[Background] Checking recent downloads for campaign:", campaignName, "folderId:", folderId);
+
+  // Validate campaign name is not empty
+  if (!campaignName || campaignName.trim() === "") {
+    const errorMsg = `Campaign name is empty for campaign ID: ${campaignId}. Please check your campaign data in the extension settings.`;
+    console.error("[Background]", errorMsg);
+    broadcastUploadStatus({
+      type: "UPLOAD_STATUS",
+      status: "error",
+      campaignName: campaignId, // Use campaignId as fallback
+      error: errorMsg,
+    });
+    throw new Error(errorMsg);
+  }
 
   // STEP 0: Check if file already exists in Google Drive before downloading
   try {
     console.log("[Background] STEP 0: Checking if file already exists in Google Drive...");
-    
-    // Detect region to get the correct folder
-    const regionInfo = detectRegionFromCampaign(campaignName);
-    if (!regionInfo) {
-      throw new Error(`Could not detect region from campaign name: ${campaignName}`);
-    }
-    
+
     // Get auth token
     const token = await getAuthToken();
-    
-    // First find the campaign folder
-    const searchQuery = encodeURIComponent(
-      `name='${campaignName}' and '${regionInfo.folderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
-    );
-    const folderResponse = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+
+    // Determine target folder ID
+    let campaignFolderId: string | null = null;
+
+    if (folderId) {
+      // Use provided folder ID directly
+      console.log("[Background] Using provided folder ID:", folderId);
+      campaignFolderId = folderId;
+    } else {
+      // Detect region to get the correct folder
+      const regionInfo = detectRegionFromCampaign(campaignName);
+      if (!regionInfo) {
+        throw new Error(`Could not detect region from campaign name: ${campaignName}`);
       }
-    );
-    
-    if (folderResponse.ok) {
-      const folderData = await folderResponse.json();
-      
-      if (folderData.files && folderData.files.length > 0) {
-        const campaignFolderId = folderData.files[0].id;
+
+      // Find the campaign folder by name
+      const searchQuery = encodeURIComponent(
+        `name='${campaignName}' and '${regionInfo.folderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
+      );
+      const folderResponse = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (folderResponse.ok) {
+        const folderData = await folderResponse.json();
+        if (folderData.files && folderData.files.length > 0) {
+          campaignFolderId = folderData.files[0].id;
+        }
+      }
+    }
+
+    if (campaignFolderId) {
         console.log("[Background] Campaign folder exists:", campaignFolderId);
         
         // Now check if a file with the campaign ID in its name exists
@@ -210,8 +245,7 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string):
           }
         }
       }
-    }
-    
+
     console.log("[Background] File does not exist in Google Drive - proceeding with download");
   } catch (error) {
     console.warn("[Background] Error checking file existence, proceeding with download:", error);
@@ -292,19 +326,31 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string):
             campaignName,
           });
 
-          // Detect region
-          const regionInfo = detectRegionFromCampaign(campaignName);
-          if (!regionInfo) {
-            throw new Error(`Could not detect region from campaign name: ${campaignName}`);
-          }
+          // Determine upload configuration
+          let uploadConfig: GoogleDriveConfig;
 
-          // Upload to Google Drive
-          const uploadConfig: GoogleDriveConfig = {
-            parentFolderId: regionInfo.folderId,
-            campaignFolderName: campaignName,
-            fileName: fileName,
-            fileBlob: fileBlob,
-          };
+          if (folderId) {
+            // Use provided folder ID directly
+            console.log("[Background] Using provided folder ID:", folderId);
+            uploadConfig = {
+              parentFolderId: folderId,
+              folderId: folderId,
+              fileName: fileName,
+              fileBlob: fileBlob,
+            };
+          } else {
+            // Detect region from campaign name
+            const regionInfo = detectRegionFromCampaign(campaignName);
+            if (!regionInfo) {
+              throw new Error(`Could not detect region from campaign name: ${campaignName}`);
+            }
+            uploadConfig = {
+              parentFolderId: regionInfo.folderId,
+              campaignFolderName: campaignName,
+              fileName: fileName,
+              fileBlob: fileBlob,
+            };
+          }
 
           const result = await uploadToGoogleDrive(uploadConfig);
 
@@ -449,7 +495,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "CHECK_AND_UPLOAD_DOWNLOAD") {
     // Handle download check and upload request from content script
     console.log("[Background] Received CHECK_AND_UPLOAD_DOWNLOAD request");
-    checkAndUploadDownload(message.campaignName, message.campaignId)
+    checkAndUploadDownload(message.campaignName, message.campaignId, message.folderId)
       .then(() => {
         sendResponse({ success: true });
       })
