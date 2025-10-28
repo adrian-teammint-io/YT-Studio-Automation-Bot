@@ -276,11 +276,16 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string, 
         }
 
         // Find the most recent .xlsx file that matches the campaign ID
-        // File format: "Product data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}"
+        // File format: "(Product|Livestream) data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}( (n))?.xlsx"
         const xlsxDownload = downloads.find(
-          (d) => d.filename.endsWith(".xlsx") &&
-                 d.state === "complete" &&
-                 d.filename.includes(`Campaign ${campaignId}`)
+          (d) => {
+            if (!d.filename.endsWith(".xlsx") || d.state !== "complete") {
+              return false;
+            }
+            // Match campaign ID with optional duplicate suffix like " (6)"
+            const campaignPattern = new RegExp(`Campaign ${campaignId}(?:\s*\(\d+\))?`);
+            return campaignPattern.test(d.filename);
+          }
         );
 
         if (!xlsxDownload) {
