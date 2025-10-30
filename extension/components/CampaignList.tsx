@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Settings, Loader2, BadgeCheckIcon, RefreshCw, Play, Pause, Clipboard, MessageCircleQuestionIcon, Flower2Icon, Trash2 } from "lucide-react";
+import { Settings, Loader2, BadgeCheckIcon, RefreshCw, Play, Pause, Clipboard, MessageCircleQuestionIcon, Flower2Icon, Trash2, PawPrintIcon } from "lucide-react";
 import { CampaignItem } from "./CampaignItem";
 import { STORAGE_KEYS } from "../constants/storage";
 import type { Campaign, UploadStatus, RegionType, CampaignType } from "../types/campaign";
@@ -103,9 +103,11 @@ export function CampaignList({
               GMV 맥스 자동화 봇
             </h2>
             {version && (
-              <Badge variant="outline" className="border-2 border-black font-semibold">
-                <BadgeCheckIcon className="size-4" color="#f72585" />v{version}
-              </Badge>
+              <>
+                <Badge variant="outline" className="border-2 border-black font-semibold">
+                  <PawPrintIcon className="size-7" color="#f72585" />v{version}
+                </Badge>
+              </>
             )}
           </div>
         </div>
@@ -326,7 +328,7 @@ export function CampaignList({
       ) : (
         <div className="py-12 text-center">
           <Button onClick={onPasteFromClipboard} variant="default">
-            <Clipboard className="mr-2 h-4 w-4" />
+            <Clipboard className="h-4 w-4" />
             클립보드에서 붙여넣기
           </Button>
         </div>

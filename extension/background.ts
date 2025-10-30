@@ -158,9 +158,52 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string, 
     throw new Error(errorMsg);
   }
 
-  // STEP 0: Check if file already exists in Google Drive before downloading
+  // STEP 0: Poll for download completion (smart wait with max 3 seconds)
+  // This ensures the file is downloaded before we check Drive or process uploads
+  console.log("[Background] Polling for download to complete...");
+
+  const MAX_POLL_TIME = 3000; // Maximum wait time in ms
+  const POLL_INTERVAL = 300; // Check every 300ms
+  const startTime = Date.now();
+  let downloadFound = false;
+
+  while (!downloadFound && (Date.now() - startTime) < MAX_POLL_TIME) {
+    // Check if download exists
+    const downloads = await new Promise<chrome.downloads.DownloadItem[]>((resolve) => {
+      chrome.downloads.search(
+        {
+          orderBy: ["-startTime"],
+          limit: 5,
+        },
+        (items) => resolve(items || [])
+      );
+    });
+
+    // Look for the campaign file
+    const campaignPattern = new RegExp(`Campaign ${campaignId}(?:\\s*\\(\\d+\\))?`);
+    const foundDownload = downloads.find(
+      (d) => d.filename.endsWith(".xlsx") &&
+             d.state === "complete" &&
+             campaignPattern.test(d.filename)
+    );
+
+    if (foundDownload) {
+      console.log(`[Background] Download found after ${Date.now() - startTime}ms`);
+      downloadFound = true;
+      break;
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+  }
+
+  if (!downloadFound) {
+    console.log(`[Background] Download not found within ${MAX_POLL_TIME}ms, proceeding anyway`);
+  }
+
+  // STEP 1: Check if file already exists in Google Drive (after download completes)
   try {
-    console.log("[Background] STEP 0: Checking if file already exists in Google Drive...");
+    console.log("[Background] STEP 1: Checking if file already exists in Google Drive...");
 
     // Get auth token
     const token = await getAuthToken();
@@ -231,7 +274,7 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string, 
 
           if (existingFile) {
             console.log("[Background] ✅ File already exists in Google Drive:", existingFile.name);
-            console.log("[Background] Skipping download and upload - marking as success");
+            console.log("[Background] Skipping upload - marking as success");
 
             // Broadcast success status immediately
             broadcastUploadStatus({
@@ -241,20 +284,16 @@ async function checkAndUploadDownload(campaignName: string, campaignId: string, 
               fileName: existingFile.name,
             });
 
-            return; // Exit early - no need to download or upload
+            return; // Exit early - no need to upload again
           }
         }
       }
 
-    console.log("[Background] File does not exist in Google Drive - proceeding with download");
+    console.log("[Background] File does not exist in Google Drive - proceeding with upload");
   } catch (error) {
-    console.warn("[Background] Error checking file existence, proceeding with download:", error);
-    // Continue with download even if check fails
+    console.warn("[Background] Error checking file existence, proceeding with upload:", error);
+    // Continue with upload even if check fails
   }
-
-  // Wait a bit for the download to complete
-  // Increased delay to ensure file is fully downloaded before checking
-  await new Promise((resolve) => setTimeout(resolve, 3000));
 
   return new Promise((resolve, reject) => {
     chrome.downloads.search(

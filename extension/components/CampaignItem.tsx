@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, XCircle, Cat, FolderOpen, Link2Icon } from "lucide-react";
+import { Loader2, XCircle, Cat, FolderOpen, Link2Icon, EyeIcon, SquareArrowUpRightIcon, ArrowUpRightIcon } from "lucide-react";
 import type { Campaign, UploadStatus } from "../types/campaign";
 import { getRegionBadgeColor, getTypeBadgeColor, getBadgeStyle } from "../utils/badgeColors";
 import { ExternalLinkIcon } from "@radix-ui/react-icons";
@@ -53,7 +53,7 @@ export function CampaignItem({
               </div>
               {campaign.region && (
                 <Badge
-                  className="text-xs h-5 px-1.5"
+                  className="text-xs border-2 border-black rounded-none h-5 px-1.5"
                   style={getBadgeStyle(getRegionBadgeColor(campaign.region))}
                 >
                   {campaign.region}
@@ -61,7 +61,7 @@ export function CampaignItem({
               )}
               {campaign.type && (
                 <Badge
-                  className="text-xs h-5 px-1.5"
+                  className="text-xs border-2 border-black rounded-none h-5 px-1.5"
                   style={getBadgeStyle(getTypeBadgeColor(campaign.type))}
                 >
                   {campaign.type}
@@ -107,7 +107,7 @@ export function CampaignItem({
               className="shadow-brutal-button rounded-none h-8 w-8 p-0"
               title="Open Google Drive folder"
             >
-              <FolderOpen className="size-4" />
+              <ArrowUpRightIcon className="size-5" />
             </Button>
           </div>
         </div>
