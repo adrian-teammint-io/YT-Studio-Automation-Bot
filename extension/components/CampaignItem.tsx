@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, XCircle, Cat, FolderOpen, Link2Icon, EyeIcon, SquareArrowUpRightIcon, ArrowUpRightIcon } from "lucide-react";
+import { Loader2, XCircle, Cat, FolderOpen, Link2Icon, EyeIcon, SquareArrowUpRightIcon } from "lucide-react";
 import type { Campaign, UploadStatus } from "../types/campaign";
 import { getRegionBadgeColor, getTypeBadgeColor, getBadgeStyle } from "../utils/badgeColors";
 import { ExternalLinkIcon } from "@radix-ui/react-icons";
@@ -107,7 +107,7 @@ export function CampaignItem({
               className="shadow-brutal-button rounded-none h-8 w-8 p-0"
               title="Open Google Drive folder"
             >
-              <ArrowUpRightIcon className="size-5" />
+              <FolderOpen className="size-4" />
             </Button>
           </div>
         </div>

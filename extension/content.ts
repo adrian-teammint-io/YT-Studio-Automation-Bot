@@ -1339,9 +1339,70 @@ async function injectNavigationButtons(): Promise<void> {
 }
 
 /**
- * Listen for upload status messages from background script
+ * Toggle visibility of all injected UI elements
+ */
+function setButtonsVisibility(visible: boolean): void {
+  const elements = [
+    document.getElementById("gmv-max-navigation-container"),
+    document.getElementById("gmv-max-upload-status-toast"),
+    document.getElementById("gmv-max-date-display"),
+    document.getElementById("gmv-max-progress-toast"),
+    document.getElementById("gmv-max-stop-btn"),
+    document.getElementById("gmv-max-resume-btn"),
+  ];
+
+  elements.forEach((element) => {
+    if (element) {
+      if (visible) {
+        // Restore original display value
+        if (element.hasAttribute("data-original-display")) {
+          const originalDisplay = element.getAttribute("data-original-display") || "flex";
+          element.style.display = originalDisplay;
+          element.removeAttribute("data-original-display");
+        } else {
+          // If no stored value, set appropriate default
+          // For control buttons (stop/resume), let updateControlButtons handle visibility
+          if (element.id === "gmv-max-stop-btn" || element.id === "gmv-max-resume-btn") {
+            // Don't set display here - updateControlButtons will handle it
+            element.style.removeProperty("display");
+          } else {
+            // For other elements, default to flex
+            element.style.display = "flex";
+          }
+        }
+      } else {
+        // Store current computed display value before hiding
+        const computedDisplay = window.getComputedStyle(element).display;
+        if (computedDisplay !== "none") {
+          element.setAttribute("data-original-display", computedDisplay);
+        } else {
+          // If element is already hidden, store empty string to indicate it should stay hidden
+          element.setAttribute("data-original-display", "none");
+        }
+        element.style.display = "none";
+      }
+    }
+  });
+
+  // After restoring visibility, update control buttons to ensure correct stop/resume button is shown
+  if (visible) {
+    updateControlButtons();
+    updateNavigationButtons();
+  }
+
+  console.log(`[GMV Max Navigator] Buttons visibility set to: ${visible}`);
+}
+
+/**
+ * Listen for messages from popup and background script
  */
 chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === "TOGGLE_BUTTONS_VISIBILITY") {
+    console.log("[GMV Max Navigator] Received toggle visibility message:", message.visible);
+    setButtonsVisibility(message.visible);
+    return;
+  }
+
   if (message.type === "UPLOAD_STATUS") {
     console.log("[GMV Max Navigator] Received upload status:", message);
 
@@ -1474,6 +1535,19 @@ async function initialize() {
 
     // Ensure paused when there are no campaigns to upload
     await checkAndPauseIfNoPendingCampaigns();
+
+    // Load and apply button visibility state
+    try {
+      const visibilityResult = await chrome.storage.local.get([STORAGE_KEYS.BUTTONS_VISIBLE]);
+      const isVisible = visibilityResult[STORAGE_KEYS.BUTTONS_VISIBLE];
+
+      // Default to true if not set
+      if (isVisible === false) {
+        setButtonsVisibility(false);
+      }
+    } catch (e) {
+      console.warn("[GMV Max Navigator] Failed to load button visibility state");
+    }
 
     // Check if auto-click is enabled
     const result = await chrome.storage.local.get([STORAGE_KEY]);

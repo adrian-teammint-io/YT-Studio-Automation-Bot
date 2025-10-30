@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, Trash2, CheckCircle2 } from "lucide-react";
+import { ChevronLeft, Trash2, CheckCircle2, Eye, EyeOff } from "lucide-react";
 import { DateRangePicker } from "./DateRangePicker";
 import { CampaignInput } from "./CampaignInput";
 
@@ -16,6 +16,7 @@ interface SettingsViewProps {
   endMonth: number;
   endDay: number;
   isLoading: boolean;
+  buttonsVisible: boolean;
   onCampaignDataChange: (value: string) => void;
   onStartYearChange: (value: number) => void;
   onStartMonthChange: (value: number) => void;
@@ -29,6 +30,7 @@ interface SettingsViewProps {
   onSetLast30Days: () => void;
   onClearAllData: () => void;
   onBack: () => void;
+  onToggleButtons: () => void;
 }
 
 function parseDateToComponents(dateStr: string): { year: number; month: number; day: number } | null {
@@ -56,6 +58,7 @@ export function SettingsView({
   endMonth,
   endDay,
   isLoading,
+  buttonsVisible,
   onCampaignDataChange,
   onStartYearChange,
   onStartMonthChange,
@@ -69,6 +72,7 @@ export function SettingsView({
   onSetLast30Days,
   onClearAllData,
   onBack,
+  onToggleButtons,
 }: SettingsViewProps) {
   const handleDatesExtracted = (startDate: string, endDate: string) => {
     const start = parseDateToComponents(startDate);
@@ -130,7 +134,6 @@ export function SettingsView({
         isLoading={isLoading}
       />
 
-      <div className="h-[1px] w-full bg-black" />
 
       <div className="space-y-6">
         {/* Campaign Data Input */}
@@ -155,6 +158,32 @@ export function SettingsView({
           />
         </div>
       </div>
+
+      {/* Button Visibility Toggle */}
+      <div className="space-y-2 gap-4">
+        <div className="font-bold text-xl text-foreground">
+          버튼 표시 제어
+        </div>
+        <Button
+          onClick={onToggleButtons}
+          disabled={isLoading}
+          variant="outline"
+          className="w-full shadow-brutal-button rounded-none flex items-center gap-2"
+        >
+          {buttonsVisible ? (
+            <>
+              <EyeOff className="size-4" />
+              <span>버튼 숨기기</span>
+            </>
+          ) : (
+            <>
+              <Eye className="size-4" />
+              <span>버튼 표시</span>
+            </>
+          )}
+        </Button>
+      </div>
+
     </>
   );
 }

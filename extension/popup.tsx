@@ -26,6 +26,7 @@ export default function URLReplacerPopup() {
   const [lastSavedCampaignData, setLastSavedCampaignData] = React.useState("");
   const [version, setVersion] = React.useState<string>("");
   const [isRefetching, setIsRefetching] = React.useState(false);
+  const [buttonsVisible, setButtonsVisible] = React.useState(true);
 
   // Date range state
   const [startYear, setStartYear] = React.useState(new Date().getFullYear());
@@ -49,6 +50,15 @@ export default function URLReplacerPopup() {
       try {
         const storedCampaignData = localStorage.getItem(STORAGE_KEYS.CAMPAIGN_DATA);
         const storedIndex = localStorage.getItem(STORAGE_KEYS.CURRENT_INDEX);
+
+        // Load buttons visible state from chrome.storage.local
+        if (typeof chrome !== "undefined" && chrome.storage) {
+          const buttonVisResult = await chrome.storage.local.get([STORAGE_KEYS.BUTTONS_VISIBLE]);
+          const isButtonsVisible = buttonVisResult[STORAGE_KEYS.BUTTONS_VISIBLE];
+          if (isButtonsVisible !== undefined) {
+            setButtonsVisible(isButtonsVisible);
+          }
+        }
 
         // Load date range from chrome.storage.local or fallback to localStorage
         if (typeof chrome !== "undefined" && chrome.storage) {
@@ -528,6 +538,33 @@ export default function URLReplacerPopup() {
     }
   };
 
+  const handleToggleButtons = async () => {
+    try {
+      const newVisibility = !buttonsVisible;
+      setButtonsVisible(newVisibility);
+
+      // Save to chrome.storage.local
+      if (typeof chrome !== "undefined" && chrome.storage) {
+        await chrome.storage.local.set({ [STORAGE_KEYS.BUTTONS_VISIBLE]: newVisibility });
+      }
+
+      // Send message to content script to update button visibility
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            type: "TOGGLE_BUTTONS_VISIBILITY",
+            visible: newVisibility,
+          });
+        }
+      });
+
+      toast.success(newVisibility ? "버튼이 표시됩니다" : "버튼이 숨겨집니다");
+    } catch (error) {
+      console.error("Failed to toggle buttons:", error);
+      toast.error("Failed to toggle buttons visibility");
+    }
+  };
+
   const handleRefetch = async () => {
     if (isRefetching) return;
 
@@ -858,6 +895,7 @@ export default function URLReplacerPopup() {
             endMonth={endMonth}
             endDay={endDay}
             isLoading={isLoading}
+            buttonsVisible={buttonsVisible}
             onCampaignDataChange={setCampaignDataText}
             onStartYearChange={setStartYear}
             onStartMonthChange={setStartMonth}
@@ -871,6 +909,7 @@ export default function URLReplacerPopup() {
             onSetLast30Days={setLast30Days}
             onClearAllData={clearAllData}
             onBack={() => setIsSettingsView(false)}
+            onToggleButtons={handleToggleButtons}
           />
         ) : (
           <CampaignList
