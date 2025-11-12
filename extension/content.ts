@@ -1,631 +1,1286 @@
 /**
- * Content script for auto-clicking export button on TikTok Ads GMV Max dashboard
- * Runs on campaign pages and automatically clicks the export button when available
- * Also detects downloaded files and triggers upload to Google Drive
+ * Content script for Naver SearchAd report automation
+ * Runs on Naver SearchAd report download page and automates:
+ * 1. Click "대용량 보고서 다운로드" tab
+ * 2. Select report type dropdown
+ * 3. Configure date range
+ * 4. Create report
+ * 5. Wait and refresh
+ * 6. Download TSV file
+ * 7. Upload to Google Sheets
  */
 
 import { STORAGE_KEYS } from "./constants/storage";
-import { regionDateToTimestamp } from "./utils/date-utils";
-import { buildCampaignUrl } from "./utils/url-builder";
-import type { CampaignType } from "./types/campaign";
 
-const STORAGE_KEY = "gmv_max_auto_click_enabled";
+const RETRY_INTERVAL = 1000; // 1 second between retries
 const MAX_RETRY_ATTEMPTS = 10;
-const RETRY_INTERVAL = 1000; // 1 second
-const DOWNLOAD_DETECTION_DELAY = 3000; // Wait 3 seconds after clicking before checking downloads
-const AUTO_NAVIGATION_DELAY = 2000; // Wait 2 seconds after upload success before auto-navigating to next campaign
+const REFRESH_DELAY = 1500; // 1.5 seconds before refresh
+const POLL_INTERVAL = 2000; // 2 seconds between table checks
+const MAX_POLL_ATTEMPTS = 30; // 60 seconds total polling
 
-// Deduplication: Track if we've already clicked to prevent duplicate uploads
-let hasClickedExportButton = false;
-let uploadInProgress = false;
-
-// Auto-navigation control - load from localStorage, default state is paused
-let isAutoNavigationPaused = true;
-
-
+// Workflow state
+let currentStep: "idle" | "clicking_tab" | "selecting_dropdown" | "setting_date" | "creating_report" | "waiting_refresh" | "polling_table" | "downloading" | "uploading" = "idle";
+let isWorkflowPaused = true; // Default to paused
+let pollAttempts = 0;
 
 /**
- * Attempt to find and click the export button
- * Uses multiple selector strategies for robustness
- * Includes deduplication to prevent multiple clicks
+ * Show toast notification at bottom of page
  */
-function findAndClickExportButton(): boolean {
-  // Prevent duplicate clicks
-  if (hasClickedExportButton) {
-    console.log("[GMV Max Navigator] Export button already clicked, skipping");
-    return true;
+function showToast(message: string, type: "info" | "success" | "error" | "loading" = "info"): void {
+  const toast = document.getElementById("naversa-toast");
+  if (!toast) return;
+
+  const icons = {
+    info: "ℹ️",
+    success: "✅",
+    error: "❌",
+    loading: "⏳"
+  };
+
+  toast.textContent = `${icons[type]} ${message}`;
+  toast.className = `naversa-toast naversa-toast-${type}`;
+  toast.style.display = "block";
+
+  // Auto-hide after 3 seconds for success/error
+  if (type === "success" || type === "error") {
+    setTimeout(() => {
+      toast.style.display = "none";
+    }, 3000);
   }
+}
 
-  // Strategy 1: Use data-testid attribute (most reliable)
-  const buttonByTestId = document.querySelector(
-    'button[data-testid="export-button-index-wN5QRr"]'
-  ) as HTMLButtonElement;
-
-  if (buttonByTestId) {
-    console.log("[GMV Max Navigator] Found export button by test ID");
-    hasClickedExportButton = true;
-    buttonByTestId.click();
-
-    // Trigger download detection after clicking
-    setTimeout(() => detectAndUploadDownloadedFile(), DOWNLOAD_DETECTION_DELAY);
-
-    return true;
+/**
+ * Check if extension context is still valid
+ */
+function isExtensionContextValid(): boolean {
+  try {
+    // Try to access chrome.runtime.id - if context is invalidated, this will throw
+    return chrome.runtime?.id !== undefined;
+  } catch (error) {
+    return false;
   }
+}
 
-  // Strategy 2: Use data-tea-click_for attribute
-  const buttonByTeaClick = document.querySelector(
-    'button[data-tea-click_for="export_button_view_data_product"]'
-  ) as HTMLButtonElement;
+/**
+ * Show page reload prompt when extension is invalidated
+ */
+function showReloadPrompt(): void {
+  showToast("확장 프로그램이 업데이트되었습니다. 페이지를 새로고침하세요.", "error");
 
-  if (buttonByTeaClick) {
-    console.log("[GMV Max Navigator] Found export button by tea-click attribute");
-    hasClickedExportButton = true;
-    buttonByTeaClick.click();
+  // Create a persistent reload button
+  const existingButton = document.getElementById("naversa-reload-btn");
+  if (existingButton) return;
 
-    // Trigger download detection after clicking
-    setTimeout(() => detectAndUploadDownloadedFile(), DOWNLOAD_DETECTION_DELAY);
+  const reloadBtn = document.createElement("button");
+  reloadBtn.id = "naversa-reload-btn";
+  reloadBtn.innerHTML = "🔄 새로고침";
+  reloadBtn.style.cssText = `
+    position: fixed;
+    bottom: 90px;
+    right: 32px;
+    width: 120px;
+    height: 40px;
+    z-index: 10001;
+    background: #ef4444;
+    color: white;
+    border: 2px solid black;
+    box-shadow: 0.2rem 0.2rem 0 0 black;
+    padding: 8px 12px;
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  `;
+  reloadBtn.onclick = () => window.location.reload();
+  document.body.appendChild(reloadBtn);
+}
 
-    return true;
-  }
+/**
+ * Step 1: Click "대용량 보고서 다운로드" tab
+ */
+async function clickReportTab(): Promise<boolean> {
+  console.log("[NaverSA] Step 1: Clicking '대용량 보고서 다운로드' tab...");
+  showToast("'대용량 보고서 다운로드' 탭 클릭 중...", "loading");
 
-  // Strategy 3: Use data-tid attribute
-  const buttonByTid = document.querySelector(
-    'button[data-tid="m4b_button"][data-uid*="exportbutton"]'
-  ) as HTMLButtonElement;
+  // Strategy: Find tab/button with text "대용량 보고서 다운로드"
+  const tabs = document.querySelectorAll('button, a, [role="tab"]');
 
-  if (buttonByTid) {
-    console.log("[GMV Max Navigator] Found export button by tid attribute");
-    hasClickedExportButton = true;
-    buttonByTid.click();
-
-    // Trigger download detection after clicking
-    setTimeout(() => detectAndUploadDownloadedFile(), DOWNLOAD_DETECTION_DELAY);
-
-    return true;
-  }
-
-  // Strategy 4: Look for button with launch icon SVG
-  const buttons = document.querySelectorAll('button.theme-m4b-button');
-  for (const button of buttons) {
-    const svg = button.querySelector('svg.theme-arco-icon-launch');
-    if (svg) {
-      console.log("[GMV Max Navigator] Found export button by SVG icon");
-      hasClickedExportButton = true;
-      (button as HTMLButtonElement).click();
-
-      // Trigger download detection after clicking
-      setTimeout(() => detectAndUploadDownloadedFile(), DOWNLOAD_DETECTION_DELAY);
-
+  for (const tab of tabs) {
+    if (tab.textContent?.includes("대용량 보고서 다운로드")) {
+      console.log("[NaverSA] Found report tab, clicking...");
+      (tab as HTMLElement).click();
+      showToast("탭 클릭 완료", "success");
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for tab content to load
       return true;
     }
   }
 
+  console.warn("[NaverSA] Report tab not found");
   return false;
 }
 
 /**
- * Extract campaign ID from current URL
+ * Step 2: Select "쇼핑검색 검색어 전환 상세 보고서" from dropdown
  */
-function getCampaignIdFromUrl(): string | null {
-  const url = new URL(window.location.href);
-  return url.searchParams.get("campaign_id");
-}
+async function selectReportType(): Promise<boolean> {
+  console.log("[NaverSA] Step 2: Selecting report type...");
+  showToast("보고서 유형 선택 중...", "loading");
 
-/**
- * Get campaign name from localStorage using campaign ID
- */
-async function getCampaignName(campaignId: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["gmv_max_campaign_data"], (result) => {
-      const campaigns = result.gmv_max_campaign_data || [];
-      const campaign = campaigns.find((c: { id: string; name: string }) => c.id === campaignId);
-      resolve(campaign ? campaign.name : null);
-    });
+  // === DIAGNOSTIC LOGGING: Layer 1 - Find title areas ===
+  const titleAreas = document.querySelectorAll('.title-area');
+  console.log("[NaverSA] DEBUG: Found", titleAreas.length, "elements with class '.title-area'");
+
+  if (titleAreas.length === 0) {
+    console.error("[NaverSA] DIAGNOSTIC: No .title-area elements found on page");
+    console.error("[NaverSA] DIAGNOSTIC: Available classes on page:", Array.from(new Set(Array.from(document.querySelectorAll('[class]')).map(el => el.className))).slice(0, 20));
+    return false;
+  }
+
+  // === DIAGNOSTIC LOGGING: Layer 2 - Check text content ===
+  console.log("[NaverSA] DEBUG: Checking title areas for text '다운로드 항목 선택'");
+  titleAreas.forEach((area, idx) => {
+    console.log(`[NaverSA] DEBUG: titleArea[${idx}] text:`, area.textContent?.trim().substring(0, 50));
   });
+
+  let dropdownButton: HTMLElement | null = null;
+  let foundTitleArea = false;
+
+  for (const titleArea of titleAreas) {
+    if (titleArea.textContent?.includes("다운로드 항목 선택")) {
+      foundTitleArea = true;
+      console.log("[NaverSA] DEBUG: ✓ Found title area with matching text");
+
+      // === FIX: Expand search scope - try multiple strategies ===
+
+      // Strategy 1: Search in parent container (go up more levels)
+      const parentContainer = titleArea.closest('div')?.parentElement;
+      console.log("[NaverSA] DEBUG: Trying parent container...");
+
+      if (parentContainer) {
+        // Try multiple selector patterns
+        dropdownButton = parentContainer.querySelector('.dropdown-toggle') as HTMLElement;
+
+        if (!dropdownButton) {
+          dropdownButton = parentContainer.querySelector('button[class*="dropdown"]') as HTMLElement;
+        }
+
+        if (!dropdownButton) {
+          dropdownButton = parentContainer.querySelector('select') as HTMLElement;
+        }
+
+        if (!dropdownButton) {
+          // Look for any button near the title
+          const buttons = parentContainer.querySelectorAll('button');
+          if (buttons.length > 0) {
+            dropdownButton = buttons[0] as HTMLElement;
+            console.log("[NaverSA] DEBUG: Found button by fallback strategy");
+          }
+        }
+      }
+
+      // Strategy 2: Search in next sibling
+      if (!dropdownButton) {
+        console.log("[NaverSA] DEBUG: Trying sibling elements...");
+        let sibling = titleArea.nextElementSibling;
+        while (sibling && !dropdownButton) {
+          dropdownButton = sibling.querySelector('.dropdown-toggle, button, select') as HTMLElement;
+          if (!dropdownButton && (sibling.tagName === 'BUTTON' || sibling.tagName === 'SELECT')) {
+            dropdownButton = sibling as HTMLElement;
+          }
+          sibling = sibling.nextElementSibling;
+        }
+      }
+
+      console.log("[NaverSA] DEBUG: Final dropdown button found:", dropdownButton !== null);
+      if (dropdownButton) {
+        console.log("[NaverSA] DEBUG: Dropdown element tag:", dropdownButton.tagName);
+        console.log("[NaverSA] DEBUG: Dropdown element classes:", dropdownButton.className);
+      }
+
+      break;
+    }
+  }
+
+  if (!foundTitleArea) {
+    console.error("[NaverSA] DIAGNOSTIC: No title area contains '다운로드 항목 선택'");
+    console.error("[NaverSA] DIAGNOSTIC: All title area texts:", Array.from(titleAreas).map(a => a.textContent?.trim()));
+  }
+
+  if (!dropdownButton) {
+    console.warn("[NaverSA] Dropdown button not found");
+    return false;
+  }
+
+  // Click to open dropdown
+  console.log("[NaverSA] Opening dropdown...");
+  dropdownButton.click();
+  await new Promise(resolve => setTimeout(resolve, 500));
+
+  // Find and click the option "쇼핑검색 검색어 전환 상세 보고서"
+  const dropdownItems = document.querySelectorAll('.dropdown-menu li, .dropdown-menu a, [role="option"]');
+
+  for (const item of dropdownItems) {
+    if (item.textContent?.includes("쇼핑검색 검색어 전환 상세 보고서")) {
+      console.log("[NaverSA] Found target option, selecting...");
+      (item as HTMLElement).click();
+      showToast("보고서 유형 선택 완료", "success");
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return true;
+    }
+  }
+
+  console.warn("[NaverSA] Report type option not found");
+  return false;
 }
 
 /**
- * Get full campaign object by ID from storage
+ * Step 3: Set date in calendar input
  */
-async function getCampaignById(campaignId: string): Promise<any | null> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["gmv_max_campaign_data"], (result) => {
-      const campaigns = result.gmv_max_campaign_data || [];
-      const campaign = campaigns.find((c: { id: string }) => c.id === campaignId);
-      resolve(campaign || null);
-    });
-  });
+async function setDate(dateString: string): Promise<boolean> {
+  console.log("[NaverSA] Step 3: Setting date to", dateString);
+  showToast(`날짜 설정 중: ${dateString}`, "loading");
+
+  // Find the calendar input by looking for title-area "조회 일자 선택"
+  const titleAreas = document.querySelectorAll('.title-area');
+  console.log("[NaverSA] DEBUG: Found", titleAreas.length, "elements with class '.title-area'");
+
+  let calendarInput: HTMLInputElement | null = null;
+  let titleArea: Element | null = null;
+
+  for (const area of titleAreas) {
+    if (area.textContent?.includes("조회 일자 선택")) {
+      titleArea = area;
+      console.log("[NaverSA] DEBUG: Found matching title-area:", area.textContent);
+      break;
+    }
+  }
+
+  if (!titleArea) {
+    console.warn("[NaverSA] Title area '조회 일자 선택' not found");
+    return false;
+  }
+
+  // Strategy 1: Search in parent container with multiple selectors
+  const parentContainer = titleArea.closest('div')?.parentElement;
+  console.log("[NaverSA] DEBUG: Parent container HTML:", parentContainer?.innerHTML?.substring(0, 200));
+
+  if (parentContainer) {
+    // Try specific selector first
+    calendarInput = parentContainer.querySelector('input[name="calendar-input-value"]') as HTMLInputElement;
+
+    // Fallback to any date/calendar input
+    if (!calendarInput) {
+      calendarInput = parentContainer.querySelector('input[type="date"]') as HTMLInputElement;
+    }
+    if (!calendarInput) {
+      calendarInput = parentContainer.querySelector('input[class*="calendar"]') as HTMLInputElement;
+    }
+    if (!calendarInput) {
+      calendarInput = parentContainer.querySelector('input[class*="date"]') as HTMLInputElement;
+    }
+    if (!calendarInput) {
+      // Try any input that might be a date input
+      const inputs = parentContainer.querySelectorAll('input');
+      console.log("[NaverSA] DEBUG: Found", inputs.length, "input elements in parent container");
+      for (const input of inputs) {
+        if (input.type === 'text' || input.type === 'date') {
+          calendarInput = input as HTMLInputElement;
+          console.log("[NaverSA] DEBUG: Using fallback input:", input.name, input.className);
+          break;
+        }
+      }
+    }
+  }
+
+  // Strategy 2: Search in siblings if not found in parent
+  if (!calendarInput) {
+    console.log("[NaverSA] DEBUG: Searching in siblings...");
+    let sibling = titleArea.nextElementSibling;
+    while (sibling && !calendarInput) {
+      calendarInput = sibling.querySelector('input[name="calendar-input-value"], input[type="date"], input[class*="calendar"], input[class*="date"]') as HTMLInputElement;
+
+      if (!calendarInput && sibling.tagName === 'INPUT') {
+        calendarInput = sibling as HTMLInputElement;
+      }
+
+      sibling = sibling.nextElementSibling;
+    }
+  }
+
+  if (!calendarInput) {
+    console.warn("[NaverSA] Calendar input not found");
+    return false;
+  }
+
+  // Set the value
+  console.log("[NaverSA] Setting input value...");
+  calendarInput.value = dateString;
+
+  // Trigger change event
+  const changeEvent = new Event('change', { bubbles: true });
+  calendarInput.dispatchEvent(changeEvent);
+
+  const inputEvent = new Event('input', { bubbles: true });
+  calendarInput.dispatchEvent(inputEvent);
+
+  showToast("날짜 설정 완료", "success");
+  await new Promise(resolve => setTimeout(resolve, 500));
+  return true;
 }
 
 /**
- * Detect and upload the most recently downloaded file
- * Sends request to background script which has access to downloads API
- * Includes deduplication to prevent multiple uploads
+ * Step 4: Click "생성요청" button to create report
  */
-async function detectAndUploadDownloadedFile(): Promise<void> {
+async function clickCreateButton(): Promise<boolean> {
+  console.log("[NaverSA] Step 4: Clicking '생성요청' button...");
+  showToast("보고서 생성 요청 중...", "loading");
+
+  // Find button with text "생성요청"
+  const buttons = document.querySelectorAll('button');
+
+  for (const button of buttons) {
+    const span = button.querySelector('span');
+    if (span?.textContent?.includes("생성요청")) {
+      console.log("[NaverSA] Found create button, clicking...");
+      button.click();
+      showToast("생성 요청 완료", "success");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return true;
+    }
+  }
+
+  console.warn("[NaverSA] Create button not found");
+  return false;
+}
+
+/**
+ * Step 5: Refresh page after delay
+ */
+async function refreshPage(): Promise<void> {
+  console.log(`[NaverSA] Step 5: Waiting ${REFRESH_DELAY}ms before refresh...`);
+  showToast(`${REFRESH_DELAY/1000}초 후 새로고침...`, "loading");
+
+  await new Promise(resolve => setTimeout(resolve, REFRESH_DELAY));
+
+  // Mark that we're in polling phase BEFORE reload
+  console.log("[NaverSA] Setting polling flag before page refresh...");
+  sessionStorage.setItem("naversa_polling", "true");
+
+  console.log("[NaverSA] Refreshing page...");
+  showToast("페이지 새로고침 중...", "loading");
+  window.location.reload();
+}
+
+/**
+ * Step 6: Poll table for download link
+ * Check first row, first cell for download link (not "-")
+ */
+async function pollForDownloadLink(): Promise<string | null> {
+  console.log("[NaverSA] Step 6: Polling for download link...");
+  showToast("다운로드 링크 확인 중...", "loading");
+
+  pollAttempts++;
+  console.log(`[NaverSA] Poll attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS}`);
+
+  // Find the table (there's only one on the page)
+  const table = document.querySelector('table');
+  if (!table) {
+    console.warn("[NaverSA] Table not found");
+    return null;
+  }
+
+  // Get first row (excluding header)
+  const tbody = table.querySelector('tbody');
+  if (!tbody) {
+    console.warn("[NaverSA] Table body not found");
+    return null;
+  }
+
+  const firstRow = tbody.querySelector('tr');
+  if (!firstRow) {
+    console.warn("[NaverSA] No rows in table");
+    return null;
+  }
+
+  // Get first cell with data-value attribute
+  const firstCell = firstRow.querySelector('td[data-value]') as HTMLTableCellElement;
+  if (!firstCell) {
+    console.warn("[NaverSA] First cell not found");
+    return null;
+  }
+
+  const dataValue = firstCell.getAttribute('data-value');
+  console.log("[NaverSA] First cell data-value:", dataValue);
+
+  // Check if it's not "-" (which means report is ready)
+  if (dataValue && dataValue !== "" && dataValue !== "-") {
+    console.log("[NaverSA] ✅ Download link found!");
+    showToast("다운로드 링크 발견!", "success");
+
+    // Extract download URL - data-value might be a path or just an ID
+    let fullUrl: string;
+    if (dataValue.startsWith("/report-download")) {
+      // Full path provided
+      fullUrl = `https://manage.searchad.naver.com${dataValue}`;
+    } else if (/^\d+$/.test(dataValue)) {
+      // Just an ID (numeric) - construct the download URL
+      fullUrl = `https://manage.searchad.naver.com/report-download/${dataValue}`;
+      console.log("[NaverSA] Constructed download URL from ID:", fullUrl);
+    } else if (dataValue.startsWith("http")) {
+      // Already a full URL
+      fullUrl = dataValue;
+    } else {
+      // Assume it's a relative path
+      fullUrl = `https://manage.searchad.naver.com/${dataValue}`;
+    }
+
+    // Store the original URL in sessionStorage before any download happens
+    // This is critical because Chrome converts it to a blob URL after clicking
+    if (!fullUrl.startsWith('blob:')) {
+      sessionStorage.setItem('naversa_original_download_url', fullUrl);
+      console.log("[NaverSA] Stored original download URL from poll:", fullUrl);
+    }
+
+    return fullUrl;
+  }
+
+  // Not ready yet
+  console.log("[NaverSA] Report not ready yet (value is '-' or empty)");
+
+  if (pollAttempts < MAX_POLL_ATTEMPTS) {
+    showToast(`보고서 생성 대기 중... (${pollAttempts}/${MAX_POLL_ATTEMPTS})`, "loading");
+    await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+    return await pollForDownloadLink();
+  }
+
+  console.error("[NaverSA] Max poll attempts reached");
+  showToast("보고서 생성 시간 초과", "error");
+  return null;
+}
+
+/**
+ * Step 7: Download TSV file and fetch content immediately
+ * New approach: Fetch content directly instead of relying on file download
+ */
+async function downloadTSV(url: string): Promise<boolean> {
+  console.log("[NaverSA] Step 7: Fetching TSV content...");
+  console.log("[NaverSA] DEBUG: URL parameter:", url);
+  showToast("TSV 파일 가져오는 중...", "loading");
+
   try {
-    // Prevent duplicate uploads
-    if (uploadInProgress) {
-      console.log("[GMV Max Navigator] Upload already in progress, skipping");
+    // FIRST: Try to fetch the content directly using content script's session
+    // This has the best chance of success because we have cookies
+    console.log("[NaverSA] Attempting direct fetch with session cookies...");
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Accept': 'text/tab-separated-values, application/octet-stream, text/plain, */*',
+          'Cache-Control': 'no-cache',
+        }
+      });
+
+      if (response.ok) {
+        const content = await response.text();
+
+        // Quick validation
+        if (content && content.includes('\t') && !content.trim().toLowerCase().startsWith('<!doctype')) {
+          console.log("[NaverSA] ✅ Successfully fetched TSV content directly!");
+          console.log("[NaverSA] Content length:", content.length, "characters");
+
+          // Store for upload
+          sessionStorage.setItem('naversa_tsv_content', content);
+          showToast("TSV 파일 가져옴", "success");
+          return true;
+        } else {
+          console.warn("[NaverSA] Direct fetch returned invalid content");
+        }
+      }
+    } catch (fetchError) {
+      console.warn("[NaverSA] Direct fetch failed:", fetchError);
+    }
+
+    // FALLBACK: If direct fetch fails, trigger browser download
+    // Then user can run standalone script to upload
+    console.log("[NaverSA] Direct fetch failed, triggering browser download...");
+    showToast("브라우저 다운로드 시작...", "loading");
+
+    // Find the table and first row
+    const table = document.querySelector('table');
+    console.log("[NaverSA] DEBUG: Table found:", !!table);
+
+    const tbody = table?.querySelector('tbody');
+    console.log("[NaverSA] DEBUG: Tbody found:", !!tbody);
+
+    const firstRow = tbody?.querySelector('tr');
+    console.log("[NaverSA] DEBUG: First row found:", !!firstRow);
+    console.log("[NaverSA] DEBUG: First row HTML:", firstRow?.innerHTML?.substring(0, 300));
+
+    if (!firstRow) {
+      console.warn("[NaverSA] First row not found in table");
+      return false;
+    }
+
+    // Strategy 1: Find link with "다운로드" text
+    let downloadLink: HTMLElement | null = null;
+
+    const allLinks = firstRow.querySelectorAll('a');
+    console.log("[NaverSA] DEBUG: Found", allLinks.length, "links in first row");
+
+    for (const link of allLinks) {
+      const href = link.getAttribute('href');
+      console.log("[NaverSA] DEBUG: Link text:", link.textContent?.trim(), "href:", href, "onclick:", link.getAttribute('onclick'));
+      if (link.textContent?.includes("다운로드")) {
+        downloadLink = link;
+        console.log("[NaverSA] DEBUG: ✓ Found link with '다운로드' text, href:", href);
+        break;
+      }
+    }
+
+    // Strategy 2: Find link with href="#/"
+    if (!downloadLink) {
+      downloadLink = firstRow.querySelector('a[href="#/"]') as HTMLAnchorElement;
+      if (downloadLink) {
+        console.log("[NaverSA] DEBUG: Found link with href='#/'");
+      }
+    }
+
+    // Strategy 3: Find any clickable element in first cell
+    if (!downloadLink) {
+      const firstCell = firstRow.querySelector('td');
+      console.log("[NaverSA] DEBUG: First cell HTML:", firstCell?.innerHTML);
+
+      // Check for button
+      downloadLink = firstCell?.querySelector('button') as HTMLElement;
+      if (downloadLink) {
+        console.log("[NaverSA] DEBUG: Found button in first cell");
+      }
+    }
+
+    // Strategy 4: Get the download URL from data-value attribute or link href
+    let downloadUrl: string | null = null;
+
+    // First, try to get the actual href from the download link
+    if (downloadLink && downloadLink.tagName === 'A') {
+      const href = (downloadLink as HTMLAnchorElement).getAttribute('href');
+      const fullHref = (downloadLink as HTMLAnchorElement).href; // This resolves relative URLs
+      console.log("[NaverSA] DEBUG: Link href attribute:", href, "resolved href:", fullHref);
+
+      if (fullHref && !fullHref.startsWith('javascript:') && !fullHref.startsWith('blob:') && fullHref !== window.location.href) {
+        downloadUrl = fullHref;
+        console.log("[NaverSA] DEBUG: Found download URL from link.href:", downloadUrl);
+      } else if (href && href !== "#/" && !href.startsWith('javascript:') && !href.startsWith('blob:')) {
+        // Construct full URL if it's a relative path
+        if (href.startsWith('/')) {
+          downloadUrl = `https://manage.searchad.naver.com${href}`;
+        } else if (href.startsWith('http')) {
+          downloadUrl = href;
+        }
+        console.log("[NaverSA] DEBUG: Found download URL from link href attribute:", downloadUrl);
+      }
+    }
+
+    // If no URL from link, try to construct from data-value (which might be an ID)
+    if (!downloadUrl) {
+      const dataValueElement = firstRow.querySelector('[data-value]') as HTMLElement;
+      if (dataValueElement) {
+        const dataValue = dataValueElement.getAttribute('data-value');
+        console.log("[NaverSA] DEBUG: data-value:", dataValue);
+
+        if (dataValue && dataValue !== "-") {
+          // Get current page path to understand URL structure
+          const currentPath = window.location.pathname;
+          console.log("[NaverSA] DEBUG: Current page path:", currentPath);
+
+          // If it's a full path, use it directly
+          if (dataValue.startsWith('/')) {
+            downloadUrl = `https://manage.searchad.naver.com${dataValue}`;
+          }
+          // If it's just an ID (numeric), try multiple URL patterns
+          else if (/^\d+$/.test(dataValue)) {
+            // Try different URL patterns based on current page structure
+            // Pattern 1: /reports-download/download/{id}
+            // Pattern 2: /api/reports/{id}/download
+            // Pattern 3: /customers/{customerId}/reports-download/{id}
+            // Pattern 4: /report-download/{id} (already tried, got 404)
+
+            // Extract customer ID from current URL if possible
+            const customerMatch = currentPath.match(/\/customers\/([^\/]+)/);
+            const customerId = customerMatch ? customerMatch[1] : null;
+
+            // Try pattern with customer ID first
+            if (customerId) {
+              downloadUrl = `https://manage.searchad.naver.com/customers/${customerId}/reports-download/download/${dataValue}`;
+              console.log("[NaverSA] DEBUG: Trying URL pattern with customer ID:", downloadUrl);
+            } else {
+              // Try alternative patterns
+              downloadUrl = `https://manage.searchad.naver.com/reports-download/download/${dataValue}`;
+              console.log("[NaverSA] DEBUG: Trying alternative URL pattern:", downloadUrl);
+            }
+          }
+          // Otherwise, assume it's already a full URL
+          else {
+            downloadUrl = dataValue;
+          }
+          console.log("[NaverSA] DEBUG: Final download URL from data-value:", downloadUrl);
+        }
+      }
+    }
+
+    // Store the original URL in sessionStorage before clicking
+    // This is important because after clicking, Chrome converts it to a blob URL
+    // which can't be fetched from different contexts
+    if (downloadUrl && !downloadUrl.startsWith('blob:') && !downloadUrl.startsWith('javascript:')) {
+      sessionStorage.setItem('naversa_original_download_url', downloadUrl);
+      console.log("[NaverSA] DEBUG: Stored original download URL:", downloadUrl);
+    }
+
+    // If we have a download URL, fetch it directly instead of triggering browser download
+    if (downloadUrl) {
+      console.log("[NaverSA] Fetching TSV content directly from URL...");
+      showToast("TSV 파일 가져오는 중...", "loading");
+
+      try {
+        // Fetch the TSV content directly with credentials
+        // Try to mimic a browser download request as closely as possible
+        const response = await fetch(downloadUrl, {
+          method: 'GET',
+          credentials: 'include', // Include cookies for authentication
+          redirect: 'follow', // Follow redirects
+          headers: {
+            'Accept': 'text/tab-separated-values, text/plain, */*',
+            'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            // Try to mimic browser behavior
+            'Referer': window.location.href,
+            'User-Agent': navigator.userAgent,
+          }
+        });
+
+        // Check response status
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => 'Unable to read error response');
+          console.error("[NaverSA] Fetch failed:", response.status, response.statusText);
+          console.error("[NaverSA] Error response preview:", errorText.substring(0, 500));
+          throw new Error(`Failed to fetch TSV: ${response.status} ${response.statusText}. The file may not be ready or authentication failed.`);
+        }
+
+        // Check content type to ensure we got TSV, not HTML
+        const contentType = response.headers.get('content-type') || '';
+        console.log("[NaverSA] Response content-type:", contentType);
+        console.log("[NaverSA] Response URL:", response.url);
+        console.log("[NaverSA] Response status:", response.status);
+
+        // Warn if content-type suggests HTML
+        if (contentType.includes('text/html') || contentType.includes('application/xhtml')) {
+          console.warn("[NaverSA] ⚠️ Content-Type indicates HTML, not TSV!");
+        }
+
+        const tsvContent = await response.text();
+
+        // Robust validation that we got TSV content, not HTML
+        const trimmedContent = tsvContent.trim();
+        const isHTML =
+          trimmedContent.toLowerCase().startsWith('<!doctype') ||
+          trimmedContent.toLowerCase().startsWith('<html') ||
+          trimmedContent.toLowerCase().includes('<!doctype html') ||
+          trimmedContent.toLowerCase().includes('<html lang') ||
+          trimmedContent.toLowerCase().includes('<head>') ||
+          trimmedContent.toLowerCase().includes('<body>') ||
+          (trimmedContent.startsWith('<') && trimmedContent.includes('html'));
+
+        if (isHTML) {
+          console.error("[NaverSA] ❌ Received HTML instead of TSV");
+          console.error("[NaverSA] Content preview:", tsvContent.substring(0, 500));
+          throw new Error(
+            "Received HTML page instead of TSV file. The download URL may require additional authentication or the file may not be ready yet."
+          );
+        }
+
+        // Basic TSV validation - check for tab characters (TSV files must have tabs)
+        if (!tsvContent.includes('\t')) {
+          console.error("[NaverSA] ❌ Content doesn't contain tabs - not valid TSV");
+          console.error("[NaverSA] Content preview:", tsvContent.substring(0, 500));
+          throw new Error(
+            "Downloaded content does not appear to be TSV format (no tab characters found). Please check the download URL."
+          );
+        }
+
+        // Additional validation: Check if content looks like TSV (has multiple lines with tabs)
+        const lines = tsvContent.split('\n').filter(line => line.trim().length > 0);
+        const linesWithTabs = lines.filter(line => line.includes('\t')).length;
+        if (linesWithTabs === 0) {
+          console.error("[NaverSA] ❌ No lines contain tabs - not valid TSV");
+          console.error("[NaverSA] Content preview:", tsvContent.substring(0, 500));
+          throw new Error(
+            "Downloaded content does not appear to be TSV format (no tab-separated lines found)."
+          );
+        }
+
+        console.log("[NaverSA] ✅ TSV content validated, length:", tsvContent.length, "characters");
+        console.log("[NaverSA] First line:", tsvContent.split('\n')[0]?.substring(0, 100));
+        console.log("[NaverSA] Lines with tabs:", linesWithTabs, "out of", lines.length, "total lines");
+
+        // Store the TSV content in session storage for the upload step
+        sessionStorage.setItem('naversa_tsv_content', tsvContent);
+
+        showToast("TSV 파일 가져옴", "success");
+        return true;
+      } catch (error) {
+        console.error("[NaverSA] Direct fetch failed:", error);
+        console.error("[NaverSA] Falling back to clicking download link...");
+
+        // Fall through to the click-based download below
+        downloadUrl = null;
+      }
+    }
+
+    // Fallback: Strategy 5 - Try clicking any link
+    if (!downloadLink && allLinks.length > 0) {
+      downloadLink = allLinks[0] as HTMLElement;
+      console.log("[NaverSA] DEBUG: Using first link as fallback (will trigger browser download)");
+    }
+
+    if (downloadLink) {
+      console.log("[NaverSA] WARNING: Falling back to clicking download link");
+
+      // Intercept the click to capture the actual download URL
+      // The link might use JavaScript to construct the URL dynamically
+      let actualDownloadUrl: string | null = null;
+
+      // Set up an interceptor to capture the download URL
+      const originalClick = downloadLink.click.bind(downloadLink);
+      const interceptClick = () => {
+        console.log("[NaverSA] Intercepting download link click...");
+
+        // Try to get the URL from various sources
+        if (downloadLink.tagName === 'A') {
+          const href = (downloadLink as HTMLAnchorElement).href;
+          if (href && !href.startsWith('javascript:') && !href.startsWith('blob:')) {
+            actualDownloadUrl = href;
+            console.log("[NaverSA] Captured URL from link.href:", actualDownloadUrl);
+          }
+        }
+
+        // Check for data attributes that might contain the URL
+        const dataAttrs = ['data-url', 'data-href', 'data-download-url', 'data-report-id'];
+        for (const attr of dataAttrs) {
+          const value = downloadLink.getAttribute(attr);
+          if (value) {
+            console.log(`[NaverSA] Found ${attr}:`, value);
+            if (!actualDownloadUrl) {
+              actualDownloadUrl = value.startsWith('http') ? value : `https://manage.searchad.naver.com${value.startsWith('/') ? value : '/' + value}`;
+            }
+          }
+        }
+
+        // Check onclick handler for URL patterns
+        const onclick = downloadLink.getAttribute('onclick');
+        if (onclick) {
+          console.log("[NaverSA] Found onclick handler:", onclick);
+          // Try to extract URL from onclick (common patterns)
+          const urlMatch = onclick.match(/(https?:\/\/[^\s'"]+|\/[\w\/-]+)/);
+          if (urlMatch) {
+            actualDownloadUrl = urlMatch[1];
+            console.log("[NaverSA] Extracted URL from onclick:", actualDownloadUrl);
+          }
+        }
+      };
+
+      // Intercept before clicking
+      interceptClick();
+
+      // If we have a download URL, try to fetch it immediately after clicking
+      // The click might trigger authentication that makes the URL accessible
+      if (downloadUrl || actualDownloadUrl) {
+        const urlToTry = actualDownloadUrl || downloadUrl;
+        console.log("[NaverSA] Attempting to fetch URL immediately after click...", urlToTry);
+
+        // Click the link first
+        downloadLink.click();
+
+        // Wait a brief moment for the click to register
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Try fetching the URL immediately while browser session is active
+        try {
+          const urlToFetch = actualDownloadUrl || downloadUrl;
+          if (!urlToFetch) {
+            throw new Error("No download URL available to fetch");
+          }
+          console.log("[NaverSA] Fetching URL after click:", urlToFetch);
+          const response = await fetch(urlToFetch, {
+            method: 'GET',
+            credentials: 'include',
+            redirect: 'follow',
+            headers: {
+              'Accept': 'text/tab-separated-values, text/plain, */*',
+              'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+              'Cache-Control': 'no-cache',
+              'Pragma': 'no-cache',
+              'Referer': window.location.href,
+              'User-Agent': navigator.userAgent,
+            }
+          });
+
+          if (response.ok) {
+            const content = await response.text();
+
+            // Validate it's TSV, not HTML
+            const trimmedContent = content.trim();
+            const isHTML =
+              trimmedContent.toLowerCase().startsWith('<!doctype') ||
+              trimmedContent.toLowerCase().startsWith('<html') ||
+              trimmedContent.toLowerCase().includes('<!doctype html') ||
+              trimmedContent.toLowerCase().includes('<html lang') ||
+              trimmedContent.toLowerCase().includes('<head>') ||
+              trimmedContent.toLowerCase().includes('<body>') ||
+              (trimmedContent.startsWith('<') && trimmedContent.includes('html'));
+
+            if (!isHTML && content.includes('\t')) {
+              console.log("[NaverSA] ✅ Successfully fetched TSV after click!");
+              sessionStorage.setItem('naversa_tsv_content', content);
+              showToast("TSV 파일 가져옴", "success");
+              return true;
+            }
+          }
+        } catch (error) {
+          console.log("[NaverSA] Immediate fetch after click failed, will wait for download:", error);
+        }
+      }
+
+      // Fallback: Just click and wait for download
+      // Clicking the link triggers browser download with proper session cookies
+      console.log("[NaverSA] Clicking download link to trigger browser download...");
+      showToast("다운로드 시작됨", "loading");
+
+      // Simply click the link and let the browser download the file
+      // The background script will detect the download and read the file content
+      downloadLink.click();
+
+      // Wait longer for download to start and complete
+      // The browser needs time to authenticate and start the download
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      console.log("[NaverSA] Download link clicked, browser should be downloading file now");
+      return true;
+    }
+
+    console.warn("[NaverSA] Download URL not found");
+    console.warn("[NaverSA] DEBUG: First row content:", firstRow.textContent);
+    return false;
+  } catch (error) {
+    console.error("[NaverSA] Download failed:", error);
+    showToast("다운로드 실패", "error");
+    return false;
+  }
+}
+
+/**
+ * Step 8: Trigger upload to Google Sheets
+ * Handles both automatic upload (if content fetched) and manual upload guide
+ */
+async function triggerUpload(): Promise<void> {
+  console.log("[NaverSA] Step 8: Preparing upload...");
+
+  try {
+    // Check if extension context is valid before proceeding
+    if (!isExtensionContextValid()) {
+      console.error("[NaverSA] Extension context invalidated - cannot communicate with background");
+      showReloadPrompt();
       return;
     }
 
-    uploadInProgress = true;
-    console.log("[GMV Max Navigator] Detecting downloaded file...");
+    // Get configured date from storage
+    const result = await chrome.storage.local.get([STORAGE_KEYS.DATE_RANGE]);
+    const dateRange = result[STORAGE_KEYS.DATE_RANGE];
 
-    // Get campaign info from URL
-    const campaignId = getCampaignIdFromUrl();
-    if (!campaignId) {
-      console.warn("[GMV Max Navigator] No campaign ID found in URL");
-      uploadInProgress = false;
+    if (!dateRange) {
+      showToast("날짜 범위 미설정", "error");
       return;
     }
 
-    const campaign = await getCampaignById(campaignId);
-    if (!campaign) {
-      console.warn("[GMV Max Navigator] No campaign found for ID:", campaignId);
-      uploadInProgress = false;
-      return;
+    // Try to get TSV content from sessionStorage first (if direct fetch was used)
+    console.log("[NaverSA] Checking for TSV content in session storage...");
+    let tsvContent = sessionStorage.getItem('naversa_tsv_content');
+
+    if (tsvContent) {
+      console.log("[NaverSA] ✅ TSV content found in session storage, length:", tsvContent.length, "characters");
+
+      // Validate content before using it (double-check it's not HTML)
+      const trimmedContent = tsvContent.trim();
+      const isHTML =
+        trimmedContent.toLowerCase().startsWith('<!doctype') ||
+        trimmedContent.toLowerCase().startsWith('<html') ||
+        trimmedContent.toLowerCase().includes('<!doctype html') ||
+        trimmedContent.toLowerCase().includes('<html lang') ||
+        trimmedContent.toLowerCase().includes('<head>') ||
+        trimmedContent.toLowerCase().includes('<body>') ||
+        (trimmedContent.startsWith('<') && trimmedContent.includes('html'));
+
+      if (isHTML) {
+        console.error("[NaverSA] ❌ HTML content found in session storage - clearing and aborting");
+        console.error("[NaverSA] Content preview:", tsvContent.substring(0, 500));
+        sessionStorage.removeItem('naversa_tsv_content');
+        throw new Error(
+          "Invalid content detected (HTML instead of TSV). The download may have failed. Please try again."
+        );
+      }
+
+      // Validate it's actually TSV (has tabs)
+      if (!tsvContent.includes('\t')) {
+        console.error("[NaverSA] ❌ Content in session storage is not TSV (no tabs found)");
+        console.error("[NaverSA] Content preview:", tsvContent.substring(0, 500));
+        sessionStorage.removeItem('naversa_tsv_content');
+        throw new Error(
+          "Invalid content detected (not TSV format). The download may have failed. Please try again."
+        );
+      }
+
+      // Clear the session storage
+      sessionStorage.removeItem('naversa_tsv_content');
+
+      // STOP POINT: Verify file content before uploading (from sessionStorage)
+      console.log("[NaverSA] ========================================");
+      console.log("[NaverSA] 📄 FILE READ VERIFICATION (from sessionStorage)");
+      console.log("[NaverSA] ========================================");
+      console.log("[NaverSA] File size:", tsvContent.length, "characters");
+      console.log("[NaverSA] File size:", (tsvContent.length / 1024).toFixed(2), "KB");
+
+      // Show first few lines of content
+      const lines = tsvContent.split('\n').slice(0, 5);
+      console.log("[NaverSA] First 5 lines of content:");
+      lines.forEach((line, index) => {
+        console.log(`[NaverSA] Line ${index + 1}:`, line.substring(0, 100) + (line.length > 100 ? '...' : ''));
+      });
+
+      // Count rows and columns
+      const allLines = tsvContent.split('\n').filter(line => line.trim().length > 0);
+      const columnCount = allLines[0]?.split('\t').length || 0;
+      console.log("[NaverSA] Total rows:", allLines.length);
+      console.log("[NaverSA] Columns in first row:", columnCount);
+      console.log("[NaverSA] Tab character count:", (tsvContent.match(/\t/g) || []).length);
+      console.log("[NaverSA] ========================================");
+
+      // File content validated and ready for upload
+      console.log("[NaverSA] ✅ File content validated, proceeding to upload");
+    } else {
+      // Fallback: Try to read from downloaded file (if browser download was used)
+      console.log("[NaverSA] TSV not in session storage, trying to read from downloaded file...");
+      showToast("다운로드된 파일 읽는 중...", "loading");
+
+      // Wait longer for download to complete (up to 30 seconds)
+      // The download might take time, especially for large files
+      let downloadComplete = false;
+      let waitAttempts = 0;
+      const maxWaitAttempts = 30;
+
+      while (!downloadComplete && waitAttempts < maxWaitAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        waitAttempts++;
+
+        // Check if download is complete
+        const checkResponse = await new Promise<{success: boolean, content?: string, filename?: string, error?: string}>((resolve) => {
+          chrome.runtime.sendMessage(
+            { type: "GET_TSV_FILE_CONTENT" },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                resolve({ success: false, error: chrome.runtime.lastError.message });
+              } else {
+                resolve(response || { success: false });
+              }
+            }
+          );
+        });
+
+        if (checkResponse.success && checkResponse.content) {
+          downloadComplete = true;
+          console.log("[NaverSA] Download complete, file:", checkResponse.filename);
+          // Content is already available, use it directly
+          tsvContent = checkResponse.content;
+          console.log("[NaverSA] ✅ File content received from background, length:", tsvContent.length, "characters");
+
+          // STOP POINT: Verify file content before uploading (from download check)
+          console.log("[NaverSA] ========================================");
+          console.log("[NaverSA] 📄 FILE READ VERIFICATION (from download check)");
+          console.log("[NaverSA] ========================================");
+          console.log("[NaverSA] File:", checkResponse.filename);
+          console.log("[NaverSA] File size:", tsvContent.length, "characters");
+          console.log("[NaverSA] File size:", (tsvContent.length / 1024).toFixed(2), "KB");
+
+          // Show first few lines of content
+          const lines = tsvContent.split('\n').slice(0, 5);
+          console.log("[NaverSA] First 5 lines of content:");
+          lines.forEach((line, index) => {
+            console.log(`[NaverSA] Line ${index + 1}:`, line.substring(0, 100) + (line.length > 100 ? '...' : ''));
+          });
+
+          // Count rows and columns
+          const allLines = tsvContent.split('\n').filter(line => line.trim().length > 0);
+          const columnCount = allLines[0]?.split('\t').length || 0;
+          console.log("[NaverSA] Total rows:", allLines.length);
+          console.log("[NaverSA] Columns in first row:", columnCount);
+          console.log("[NaverSA] Tab character count:", (tsvContent.match(/\t/g) || []).length);
+          console.log("[NaverSA] ========================================");
+
+          break;
+        } else if (checkResponse.error?.includes("still downloading")) {
+          console.log(`[NaverSA] Download in progress, waiting... (${waitAttempts}/${maxWaitAttempts})`);
+          showToast(`다운로드 대기 중... (${waitAttempts}/${maxWaitAttempts})`, "loading");
+        }
+      }
+
+      if (!downloadComplete || !tsvContent) {
+        console.warn("[NaverSA] Could not read TSV content automatically");
+        console.log("[NaverSA] ========================================");
+        console.log("[NaverSA] 📥 MANUAL UPLOAD REQUIRED");
+        console.log("[NaverSA] ========================================");
+        console.log("[NaverSA] The file has been downloaded to your Downloads folder.");
+        console.log("[NaverSA] To upload it to Google Sheets, run this command in terminal:");
+        console.log("[NaverSA] ");
+        console.log("[NaverSA]   cd /Users/adrian-phan.team-mint.io/work-projects/naversa-automation-bot");
+        console.log("[NaverSA]   npm run fetch-latest");
+        console.log("[NaverSA] ");
+        console.log("[NaverSA] This will automatically find the latest TSV file and upload it.");
+        console.log("[NaverSA] ========================================");
+
+        showToast("파일 다운로드 완료! 터미널에서 'npm run fetch-latest'를 실행하세요", "info");
+
+        // Don't throw error - this is a valid state
+        // The user can manually run the upload script
+        return;
+      }
+
+      // If we already got content from the check, we're done
+      if (tsvContent) {
+        console.log("[NaverSA] ✅ Using content from download check");
+        // Skip the second request since we already have the content
+        // Continue to upload step
+      } else {
+
+        // Request file content from background (background will fetch it with proper auth)
+        const fileResponse = await new Promise<{success: boolean, content?: string, filename?: string, error?: string}>((resolve) => {
+          chrome.runtime.sendMessage(
+            { type: "GET_TSV_FILE_CONTENT" },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                resolve({ success: false, error: chrome.runtime.lastError.message });
+              } else {
+                resolve(response || { success: false });
+              }
+            }
+          );
+        });
+
+        if (!fileResponse.success || !fileResponse.content) {
+          throw new Error(fileResponse.error || "Failed to get TSV file content. Both direct fetch and browser download failed.");
+        }
+
+        console.log("[NaverSA] Found downloaded TSV file:", fileResponse.filename);
+        console.log("[NaverSA] Content length:", fileResponse.content.length, "characters");
+
+        // Content is already validated by background script
+        tsvContent = fileResponse.content;
+        console.log("[NaverSA] ✅ File content received and ready for upload");
+      }
     }
 
-    console.log("[GMV Max Navigator] Campaign info:", campaign);
+    // STOP POINT: Verify file content before uploading
+    if (tsvContent) {
+      console.log("[NaverSA] ========================================");
+      console.log("[NaverSA] 📄 FILE READ VERIFICATION");
+      console.log("[NaverSA] ========================================");
+      console.log("[NaverSA] File size:", tsvContent.length, "characters");
+      console.log("[NaverSA] File size:", (tsvContent.length / 1024).toFixed(2), "KB");
 
-    // Validate campaign has name and ID
-    if (!campaign.name || campaign.name.trim() === "") {
-      console.error("[GMV Max Navigator] Campaign has empty name:", campaign);
-      alert(`Campaign ID ${campaignId} has an empty name. Please fix your campaign data in the extension settings.`);
-      uploadInProgress = false;
-      return;
+      // Show first few lines of content
+      const lines = tsvContent.split('\n').slice(0, 5);
+      console.log("[NaverSA] First 5 lines of content:");
+      lines.forEach((line, index) => {
+        console.log(`[NaverSA] Line ${index + 1}:`, line.substring(0, 100) + (line.length > 100 ? '...' : ''));
+      });
+
+      // Count rows and columns
+      const allLines = tsvContent.split('\n').filter(line => line.trim().length > 0);
+      const columnCount = allLines[0]?.split('\t').length || 0;
+      console.log("[NaverSA] Total rows:", allLines.length);
+      console.log("[NaverSA] Columns in first row:", columnCount);
+      console.log("[NaverSA] Tab character count:", (tsvContent.match(/\t/g) || []).length);
+      console.log("[NaverSA] ========================================");
+
+      // File content validated and ready for upload
+      console.log("[NaverSA] ✅ File content validated, proceeding to upload");
     }
 
-    if (!campaign.id || campaign.id.trim() === "") {
-      console.error("[GMV Max Navigator] Campaign has empty ID:", campaign);
-      alert(`Campaign "${campaign.name}" has an empty ID. Please fix your campaign data in the extension settings.`);
-      uploadInProgress = false;
-      return;
-    }
-
-    // Send request to background script to handle download detection and upload
-    console.log("[GMV Max Navigator] Requesting background script to check downloads...");
+    // Send file content to background for processing
+    showToast("Google Sheets 업로드 중...", "loading");
     chrome.runtime.sendMessage(
       {
-        type: "CHECK_AND_UPLOAD_DOWNLOAD",
-        campaignName: campaign.name,
-        campaignId: campaign.id,
-        folderId: campaign.folderId, // Pass folder ID if available
+        type: "PROCESS_TSV_UPLOAD",
+        tsvContent: tsvContent,
+        dateRange: dateRange,
       },
       (response) => {
+        // Check for extension context invalidation
         if (chrome.runtime.lastError) {
-          console.error(
-            "[GMV Max Navigator] Error sending message to background:",
-            chrome.runtime.lastError
-          );
-          uploadInProgress = false;
+          console.error("[NaverSA] Message error:", chrome.runtime.lastError);
+
+          // Specific handling for context invalidation
+          if (chrome.runtime.lastError.message?.includes("Extension context invalidated")) {
+            console.error("[NaverSA] Extension was reloaded - page refresh required");
+            showReloadPrompt();
+          } else {
+            showToast("업로드 실패", "error");
+          }
           return;
         }
 
         if (response?.success) {
-          console.log("[GMV Max Navigator] Background script processing upload");
+          console.log("[NaverSA] Upload successful");
+          showToast("업로드 완료!", "success");
+
+          // Mark as completed and move to next date if applicable
+          setTimeout(() => {
+            if (!isWorkflowPaused) {
+              // Auto-continue to next date or pause
+              console.log("[NaverSA] Workflow continuing...");
+            }
+          }, 2000);
         } else {
-          console.error("[GMV Max Navigator] Background script error:", response?.error);
+          console.error("[NaverSA] Upload failed:", response?.error);
+          showToast(`업로드 실패: ${response?.error || "Unknown error"}`, "error");
         }
-
-        // Reset flag after upload completes (with delay to ensure background processing finishes)
-        setTimeout(() => {
-          uploadInProgress = false;
-        }, 5000);
       }
     );
   } catch (error) {
-    console.error("[GMV Max Navigator] Error in detectAndUploadDownloadedFile:", error);
-    uploadInProgress = false;
+    console.error("[NaverSA] Upload trigger failed:", error);
+
+    // Check if it's a context invalidation error
+    if (error instanceof Error && error.message.includes("Extension context invalidated")) {
+      showReloadPrompt();
+    } else {
+      showToast("업로드 실패", "error");
+    }
   }
 }
 
 /**
- * Retry logic for finding and clicking the button
- * The button might not be immediately available when the page loads
+ * Main workflow execution
  */
-function attemptAutoClick(attempt: number = 1) {
-  console.log(`[GMV Max Navigator] Attempt ${attempt}/${MAX_RETRY_ATTEMPTS} to find export button`);
-
-  const clicked = findAndClickExportButton();
-
-  if (clicked) {
-    console.log("[GMV Max Navigator] Successfully clicked export button");
+async function executeWorkflow(): Promise<void> {
+  if (isWorkflowPaused) {
+    console.log("[NaverSA] Workflow is paused");
     return;
   }
 
-  if (attempt < MAX_RETRY_ATTEMPTS) {
-    setTimeout(() => attemptAutoClick(attempt + 1), RETRY_INTERVAL);
-  } else {
-    console.log("[GMV Max Navigator] Max retry attempts reached. Export button not found.");
-  }
-}
+  console.log("[NaverSA] ========================================");
+  console.log("[NaverSA] Starting Naver SearchAd automation workflow");
+  console.log("[NaverSA] ========================================");
 
-/**
- * Navigate to the previous uncompleted campaign
- */
-async function goToPrevCampaign(): Promise<void> {
   try {
-    const result = await chrome.storage.local.get([
-      STORAGE_KEYS.CAMPAIGN_DATA,
-      STORAGE_KEYS.CURRENT_INDEX,
-      STORAGE_KEYS.UPLOAD_SUCCESS_STATUS,
-      STORAGE_KEYS.CAMPAIGN_REGIONS,
-      STORAGE_KEYS.CAMPAIGN_TYPES,
-      STORAGE_KEYS.DATE_RANGE,
-    ]);
-
-    const campaigns = result[STORAGE_KEYS.CAMPAIGN_DATA] || [];
-    const currentIndex = parseInt(result[STORAGE_KEYS.CURRENT_INDEX] || "0", 10);
-    const uploadSuccessStatus = result[STORAGE_KEYS.UPLOAD_SUCCESS_STATUS] || {};
-    const campaignRegions = result[STORAGE_KEYS.CAMPAIGN_REGIONS] || {};
-    const campaignTypes = result[STORAGE_KEYS.CAMPAIGN_TYPES] || {};
+    // Get configured date
+    const result = await chrome.storage.local.get([STORAGE_KEYS.DATE_RANGE]);
     const dateRange = result[STORAGE_KEYS.DATE_RANGE];
 
-    if (campaigns.length === 0) {
-      alert("No campaigns available");
-      return;
-    }
-
     if (!dateRange) {
-      alert("Date range not configured. Please set date range in extension popup.");
+      showToast("날짜 설정 필요", "error");
+      console.error("[NaverSA] Date range not configured");
       return;
     }
 
-    // Find the previous uncompleted campaign
-    let prevIndex = currentIndex - 1;
-    let foundPrev = false;
+    // Format date as YYYY-MM-DD
+    const dateString = `${dateRange.startYear}-${String(dateRange.startMonth).padStart(2, '0')}-${String(dateRange.startDay).padStart(2, '0')}`;
+    console.log("[NaverSA] Using date:", dateString);
 
-    // Search backward from current position
-    for (let i = prevIndex; i >= 0; i--) {
-      const campaign = campaigns[i];
-      const uploadStatus = uploadSuccessStatus[campaign.name];
-
-      // Skip completed campaigns
-      if (!uploadStatus || uploadStatus.status !== "success") {
-        prevIndex = i;
-        foundPrev = true;
-        break;
-      }
+    // Execute steps sequentially
+    currentStep = "clicking_tab";
+    if (!await clickReportTab()) {
+      throw new Error("Failed to click report tab");
     }
 
-    // If no uncompleted campaign found before, wrap around to end
-    if (!foundPrev) {
-      for (let i = campaigns.length - 1; i >= currentIndex; i--) {
-        const campaign = campaigns[i];
-        const uploadStatus = uploadSuccessStatus[campaign.name];
-
-        if (!uploadStatus || uploadStatus.status !== "success") {
-          prevIndex = i;
-          foundPrev = true;
-          break;
-        }
-      }
+    currentStep = "selecting_dropdown";
+    if (!await selectReportType()) {
+      throw new Error("Failed to select report type");
     }
 
-    if (!foundPrev) {
-      alert("All campaigns completed! 🎉");
-      return;
+    currentStep = "setting_date";
+    if (!await setDate(dateString)) {
+      throw new Error("Failed to set date");
     }
 
-    // Navigate to previous campaign with proper URL building
-    const campaign = campaigns[prevIndex];
-    const region = campaignRegions[campaign.id];
-
-    if (!region) {
-      alert(`Please select a region for campaign: ${campaign.name}`);
-      return;
+    currentStep = "creating_report";
+    if (!await clickCreateButton()) {
+      throw new Error("Failed to click create button");
     }
 
-    // Calculate timestamps based on region
-    const startTimestamp = regionDateToTimestamp(
-      region,
-      dateRange.startYear,
-      dateRange.startMonth,
-      dateRange.startDay
-    );
-    const endTimestamp = regionDateToTimestamp(
-      region,
-      dateRange.endYear,
-      dateRange.endMonth,
-      dateRange.endDay
-    );
+    currentStep = "waiting_refresh";
+    await refreshPage();
 
-    // Get campaign type (default to PRODUCT if not set)
-    const campaignType: CampaignType = campaignTypes[campaign.id] || "PRODUCT";
-
-    // Build the campaign URL
-    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp, campaignType);
-
-    // Update current index
-    await chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: prevIndex.toString() });
-
-    console.log(`[GMV Max Navigator] Navigating to previous campaign: ${campaign.name}`);
-    window.location.href = newUrl;
   } catch (error) {
-    console.error("[GMV Max Navigator] Error navigating to previous campaign:", error);
-    alert("Failed to navigate to previous campaign");
+    console.error("[NaverSA] Workflow failed:", error);
+    showToast(`오류: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
+    currentStep = "idle";
   }
 }
 
 /**
- * Navigate to the first uncompleted campaign in the list
+ * Continue workflow after page refresh (polling phase)
  */
-async function goToFirstCampaign(): Promise<void> {
+async function continueWorkflowAfterRefresh(): Promise<void> {
+  console.log("[NaverSA] Continuing workflow after refresh...");
+
+  // Wait for page content to fully load
+  console.log("[NaverSA] Waiting for page content to load...");
+  showToast("페이지 로딩 대기 중...", "loading");
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
   try {
-    const result = await chrome.storage.local.get([
-      STORAGE_KEYS.CAMPAIGN_DATA,
-      STORAGE_KEYS.UPLOAD_SUCCESS_STATUS,
-      STORAGE_KEYS.CAMPAIGN_REGIONS,
-      STORAGE_KEYS.CAMPAIGN_TYPES,
-      STORAGE_KEYS.DATE_RANGE,
-    ]);
+    currentStep = "polling_table";
+    const downloadUrl = await pollForDownloadLink();
 
-    const campaigns = result[STORAGE_KEYS.CAMPAIGN_DATA] || [];
-    const uploadSuccessStatus = result[STORAGE_KEYS.UPLOAD_SUCCESS_STATUS] || {};
-    const campaignRegions = result[STORAGE_KEYS.CAMPAIGN_REGIONS] || {};
-    const campaignTypes = result[STORAGE_KEYS.CAMPAIGN_TYPES] || {};
-    const dateRange = result[STORAGE_KEYS.DATE_RANGE];
-
-    if (campaigns.length === 0) {
-      alert("No campaigns available");
-      return;
+    if (!downloadUrl) {
+      throw new Error("Failed to get download link");
     }
 
-    if (!dateRange) {
-      alert("Date range not configured. Please set date range in extension popup.");
-      return;
+    currentStep = "downloading";
+    if (!await downloadTSV(downloadUrl)) {
+      throw new Error("Failed to download TSV");
     }
 
-    // Find the first uncompleted campaign
-    let firstIndex = -1;
-    for (let i = 0; i < campaigns.length; i++) {
-      const campaign = campaigns[i];
-      const uploadStatus = uploadSuccessStatus[campaign.name];
+    currentStep = "uploading";
+    await triggerUpload();
 
-      // Skip completed campaigns
-      if (!uploadStatus || uploadStatus.status !== "success") {
-        firstIndex = i;
-        break;
-      }
-    }
+    currentStep = "idle";
+    console.log("[NaverSA] ========================================");
+    console.log("[NaverSA] Workflow completed successfully!");
+    console.log("[NaverSA] ========================================");
 
-    if (firstIndex === -1) {
-      alert("All campaigns completed! 🎉");
-      return;
-    }
-
-    // Navigate to first uncompleted campaign with proper URL building
-    const campaign = campaigns[firstIndex];
-    const region = campaignRegions[campaign.id];
-
-    if (!region) {
-      alert(`Please select a region for campaign: ${campaign.name}`);
-      return;
-    }
-
-    // Calculate timestamps based on region
-    const startTimestamp = regionDateToTimestamp(
-      region,
-      dateRange.startYear,
-      dateRange.startMonth,
-      dateRange.startDay
-    );
-    const endTimestamp = regionDateToTimestamp(
-      region,
-      dateRange.endYear,
-      dateRange.endMonth,
-      dateRange.endDay
-    );
-
-    // Get campaign type (default to PRODUCT if not set)
-    const campaignType: CampaignType = campaignTypes[campaign.id] || "PRODUCT";
-
-    // Build the campaign URL
-    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp, campaignType);
-
-    // Update current index
-    await chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: firstIndex.toString() });
-
-    console.log(`[GMV Max Navigator] Navigating to first campaign: ${campaign.name}`);
-    window.location.href = newUrl;
   } catch (error) {
-    console.error("[GMV Max Navigator] Error navigating to first campaign:", error);
-    alert("Failed to navigate to first campaign");
+    console.error("[NaverSA] Workflow continuation failed:", error);
+    showToast(`오류: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
+    currentStep = "idle";
   }
 }
 
 /**
- * Navigate to the next uncompleted campaign
+ * Inject UI elements (toast, buttons)
  */
-async function goToNextCampaign(): Promise<void> {
-  try {
-    const result = await chrome.storage.local.get([
-      STORAGE_KEYS.CAMPAIGN_DATA,
-      STORAGE_KEYS.CURRENT_INDEX,
-      STORAGE_KEYS.UPLOAD_SUCCESS_STATUS,
-      STORAGE_KEYS.CAMPAIGN_REGIONS,
-      STORAGE_KEYS.CAMPAIGN_TYPES,
-      STORAGE_KEYS.DATE_RANGE,
-    ]);
-
-    const campaigns = result[STORAGE_KEYS.CAMPAIGN_DATA] || [];
-    const currentIndex = parseInt(result[STORAGE_KEYS.CURRENT_INDEX] || "0", 10);
-    const uploadSuccessStatus = result[STORAGE_KEYS.UPLOAD_SUCCESS_STATUS] || {};
-    const campaignRegions = result[STORAGE_KEYS.CAMPAIGN_REGIONS] || {};
-    const campaignTypes = result[STORAGE_KEYS.CAMPAIGN_TYPES] || {};
-    const dateRange = result[STORAGE_KEYS.DATE_RANGE];
-
-    if (campaigns.length === 0) {
-      alert("No campaigns available");
-      return;
-    }
-
-    if (!dateRange) {
-      alert("Date range not configured. Please set date range in extension popup.");
-      return;
-    }
-
-    // Find the next uncompleted campaign
-    let nextIndex = currentIndex + 1;
-    let foundNext = false;
-
-    // Search forward from current position
-    for (let i = nextIndex; i < campaigns.length; i++) {
-      const campaign = campaigns[i];
-      const uploadStatus = uploadSuccessStatus[campaign.name];
-
-      // Skip completed campaigns
-      if (!uploadStatus || uploadStatus.status !== "success") {
-        nextIndex = i;
-        foundNext = true;
-        break;
-      }
-    }
-
-    // If no uncompleted campaign found ahead, wrap around to beginning
-    if (!foundNext) {
-      for (let i = 0; i <= currentIndex; i++) {
-        const campaign = campaigns[i];
-        const uploadStatus = uploadSuccessStatus[campaign.name];
-
-        if (!uploadStatus || uploadStatus.status !== "success") {
-          nextIndex = i;
-          foundNext = true;
-          break;
-        }
-      }
-    }
-
-    if (!foundNext) {
-      alert("All campaigns completed! 🎉");
-      return;
-    }
-
-    // Navigate to next campaign with proper URL building
-    const campaign = campaigns[nextIndex];
-    const region = campaignRegions[campaign.id];
-
-    if (!region) {
-      alert(`Please select a region for campaign: ${campaign.name}`);
-      return;
-    }
-
-    // Calculate timestamps based on region
-    const startTimestamp = regionDateToTimestamp(
-      region,
-      dateRange.startYear,
-      dateRange.startMonth,
-      dateRange.startDay
-    );
-    const endTimestamp = regionDateToTimestamp(
-      region,
-      dateRange.endYear,
-      dateRange.endMonth,
-      dateRange.endDay
-    );
-
-    // Get campaign type (default to PRODUCT if not set)
-    const campaignType: CampaignType = campaignTypes[campaign.id] || "PRODUCT";
-
-    // Build the campaign URL
-    const newUrl = buildCampaignUrl(region, campaign.id, startTimestamp, endTimestamp, campaignType);
-
-    // Update current index
-    await chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_INDEX]: nextIndex.toString() });
-
-    console.log(`[GMV Max Navigator] Navigating to next campaign: ${campaign.name}`);
-    window.location.href = newUrl;
-  } catch (error) {
-    console.error("[GMV Max Navigator] Error navigating to next campaign:", error);
-    alert("Failed to navigate to next campaign");
-  }
-}
-
-/**
- * Update upload status toast with current status
- */
-function updateUploadStatusToast(
-  status: "idle" | "uploading" | "success" | "error",
-  message?: string
-): void {
-  const toast = document.getElementById("gmv-max-upload-status-toast");
-  if (!toast) return;
-
-  // Update status class
-  toast.className = `gmv-max-upload-status-toast gmv-max-upload-status-${status}`;
-
-  // Update icon and message
-  let icon = "";
-  let text = "";
-
-  switch (status) {
-    case "idle":
-      toast.style.display = "none";
-      return;
-    case "uploading":
-      icon = `<svg class="gmv-max-status-spinner" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-      </svg>`;
-      text = message || "업로드 중...";
-      break;
-    case "success":
-      icon = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-        <polyline points="22 4 12 14.01 9 11.01"></polyline>
-      </svg>`;
-      text = message || "업로드 완료!";
-      break;
-    case "error":
-      icon = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"></circle>
-        <line x1="15" y1="9" x2="9" y2="15"></line>
-        <line x1="9" y1="9" x2="15" y2="15"></line>
-      </svg>`;
-      text = message || "업로드 실패";
-      break;
-  }
-
-  toast.innerHTML = `
-    <div class="gmv-max-status-content">
-      ${icon}
-      <span>${text}</span>
-    </div>
-  `;
-
-  toast.style.display = "flex";
-
-  // Auto-hide success/error messages after 5 seconds
-  if (status === "success" || status === "error") {
-    setTimeout(() => {
-      toast.style.display = "none";
-    }, 5000);
-  }
-}
-
-/**
- * Inject status toast element above the Next Campaign button
- * Always visible but may show different states based on configuration
- */
-async function injectUploadStatusToast(): Promise<void> {
-  // Check if toast already exists
-  if (document.getElementById("gmv-max-upload-status-toast")) {
-    return;
-  }
-
-  // Create toast element
-  const toast = document.createElement("div");
-  toast.id = "gmv-max-upload-status-toast";
-  toast.className = "gmv-max-upload-status-toast gmv-max-upload-status-idle";
-
-  // Add styles using a style tag for animations and complex selectors
-  const styleTag = document.createElement("style");
-  styleTag.textContent = `
-    .gmv-max-upload-status-toast {
+function injectUI(): void {
+  // Inject toast
+  if (!document.getElementById("naversa-toast")) {
+    const toast = document.createElement("div");
+    toast.id = "naversa-toast";
+    toast.className = "naversa-toast";
+    toast.style.cssText = `
       position: fixed;
-      bottom: 184px;
+      bottom: 100px;
       right: 32px;
       z-index: 10000;
       background: white;
@@ -635,966 +1290,396 @@ async function injectUploadStatusToast(): Promise<void> {
       font-size: 14px;
       font-weight: 600;
       display: none;
-      align-items: center;
-      gap: 8px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      width: 150px;
-    }
-
-    .gmv-max-status-content {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .gmv-max-upload-status-uploading {
-      background: #eff6ff;
-      border-color: #3b82f6;
-      color: #1e40af;
-    }
-
-    .gmv-max-upload-status-success {
-      background: #f0fdf4;
-      border-color: #22c55e;
-      color: #15803d;
-    }
-
-    .gmv-max-upload-status-error {
-      background: #fef2f2;
-      border-color: #ef4444;
-      color: #991b1b;
-    }
-
-    .gmv-max-status-spinner {
-      animation: gmv-max-spin 1s linear infinite;
-    }
-
-    @keyframes gmv-max-spin {
-      from {
-        transform: rotate(0deg);
-      }
-      to {
-        transform: rotate(360deg);
-      }
-    }
-  `;
-
-  // Inject styles and toast
-  document.head.appendChild(styleTag);
-  document.body.appendChild(toast);
-  console.log("[GMV Max Navigator] Upload status toast injected");
-}
-
-/**
- * Inject a date display box showing the configured date range
- * Positioned above the progress toast
- */
-async function injectDateDisplayBox(): Promise<void> {
-  if (document.getElementById("gmv-max-date-display")) {
-    return;
-  }
-
-  const dateBox = document.createElement("div");
-  dateBox.id = "gmv-max-date-display";
-  dateBox.className = "gmv-max-date-display";
-  dateBox.style.cssText = `
-    position: fixed;
-    bottom: 238px; /* above progress toast (130px) and upload toast (184px) */
-    right: 32px;
-    z-index: 10000;
-    background: white;
-    border: 2px solid black;
-    box-shadow: 0.2rem 0.2rem 0 0 black;
-    padding: 10px 14px;
-    font-size: 13px;
-    font-weight: 600;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    width: 150px;
-    text-align: center;
-  `;
-
-  document.body.appendChild(dateBox);
-  await updateDateDisplay();
-  console.log("[GMV Max Navigator] Date display box injected");
-}
-
-/**
- * Update the date display box with current configured date range
- */
-async function updateDateDisplay(): Promise<void> {
-  const dateBox = document.getElementById("gmv-max-date-display");
-  if (!dateBox) return;
-
-  try {
-    const result = await chrome.storage.local.get(["gmv_max_date_range"]);
-    const dateRange = result.gmv_max_date_range;
-
-    if (dateRange) {
-      const startDate = `${dateRange.startDay}.${String(dateRange.startMonth).padStart(2, '0')}`;
-      const endDate = `${dateRange.endDay}.${String(dateRange.endMonth).padStart(2, '0')}`;
-
-      dateBox.textContent = `${startDate} - ${endDate}`;
-      dateBox.style.display = "flex";
-    } else {
-      dateBox.style.display = "none";
-    }
-  } catch (e) {
-    dateBox.style.display = "none";
-  }
-}
-
-/**
- * Inject a permanent progress toast showing uploaded/total campaigns
- * Positioned between the upload status toast and the control buttons
- */
-async function injectProgressToast(): Promise<void> {
-  if (document.getElementById("gmv-max-progress-toast")) {
-    return;
-  }
-
-  const toast = document.createElement("div");
-  toast.id = "gmv-max-progress-toast";
-  toast.className = "gmv-max-progress-toast";
-  toast.style.cssText = `
-    position: fixed;
-    bottom: 130px; /* between upload toast (150px) and buttons (85px) */
-    right: 32px;
-    z-index: 10000;
-    background: white;
-    border: 2px solid black;
-    box-shadow: 0.2rem 0.2rem 0 0 black;
-    padding: 10px 14px;
-    font-size: 14px;
-    font-weight: 700;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    width: 150px;
-    text-align: center;
-    position: fixed;
-  `;
-
-  // Create refetch button (always visible next to campaign number)
-  const refetchBtn = document.createElement("button");
-  refetchBtn.id = "gmv-max-refetch-btn";
-  refetchBtn.className = "gmv-max-refetch-btn";
-  refetchBtn.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
-    </svg>
-  `;
-  refetchBtn.style.cssText = `
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-left: 5px;
-    padding: 4px;
-    width: 24px;
-    height: 24px;
-    border: 2px solid black;
-    background: #ffffff;
-    cursor: pointer;
-    box-shadow: 0.15rem 0.15rem 0 0 black;
-  `;
-
-  // Click handler to ask background to re-check Drive and update statuses
-  refetchBtn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-
-    // Prevent multiple simultaneous requests but allow re-clicking after completion
-    if (refetchBtn.classList.contains("refetching")) {
-      return;
-    }
-
-    refetchBtn.classList.add("refetching");
-    const originalHTML = refetchBtn.innerHTML;
-
-    // Show "로딩 중..." text
-    const countSpan = document.getElementById("gmv-max-progress-count");
-    const originalCountText = countSpan?.textContent || "";
-    if (countSpan) {
-      countSpan.textContent = "로딩 중...";
-    }
-
-    // Show spinner animation in button
-    refetchBtn.innerHTML = `
-      <svg class="refetch-spinner" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
-      </svg>
+      min-width: 200px;
     `;
+    document.body.appendChild(toast);
+  }
 
-    // Add spinner animation style
-    const spinnerStyle = document.createElement("style");
-    spinnerStyle.textContent = `
-      .refetch-spinner {
-        animation: refetch-spin 1s linear infinite;
-      }
-      @keyframes refetch-spin {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
-      }
-    `;
-    if (!document.getElementById("refetch-spinner-style")) {
-      spinnerStyle.id = "refetch-spinner-style";
-      document.head.appendChild(spinnerStyle);
-    }
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        chrome.runtime.sendMessage({ type: "REFETCH_UPLOAD_STATUSES" }, (response) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
-          }
-          if (response?.success) {
-            resolve();
-          } else {
-            reject(new Error(response?.error || "Refetch failed"));
-          }
-        });
-      });
-    } catch (_) {
-      // Keep silent in content UI, rely on progress updating when possible
-    } finally {
-      await updateProgressToast();
-      refetchBtn.innerHTML = originalHTML;
-      refetchBtn.classList.remove("refetching");
-    }
-  });
-
-  // Compose toast content container so numbers and button align
-  const wrapper = document.createElement("div");
-  wrapper.style.display = "flex";
-  wrapper.style.alignItems = "center";
-  wrapper.style.justifyContent = "space-between";
-  wrapper.style.gap = "8px";
-  wrapper.style.width = "100%";
-
-  const countSpan = document.createElement("span");
-  countSpan.id = "gmv-max-progress-count";
-  wrapper.appendChild(countSpan);
-  wrapper.appendChild(refetchBtn);
-  toast.appendChild(wrapper);
-
-  document.body.appendChild(toast);
-  await updateProgressToast();
-  console.log("[GMV Max Navigator] Progress toast injected");
+  // Inject Resume/Pause buttons
+  injectControlButtons();
 }
 
 /**
- * Compute and render uploaded/total campaigns in the progress toast
+ * Inject control buttons (Resume/Pause)
  */
-async function updateProgressToast(): Promise<void> {
-  const toast = document.getElementById("gmv-max-progress-toast");
-  if (!toast) return;
+function injectControlButtons(): void {
+  if (document.getElementById("naversa-pause-btn")) return;
 
-  try {
-    const result = await chrome.storage.local.get([
-      "gmv_max_campaign_data",
-      "gmv_max_upload_success_status",
-    ]);
-
-    const campaigns: Array<{ name: string; id: string }> = result.gmv_max_campaign_data || [];
-    const successStatuses: Record<string, { status: string }> = result.gmv_max_upload_success_status || {};
-
-    const total = campaigns.length;
-    const uploaded = total === 0 ? 0 : campaigns.filter((c) => successStatuses[c.name]?.status === "success").length;
-
-    if (total > 0) {
-      // Show progress numbers by default, will be hidden on hover
-      const countSpan = document.getElementById("gmv-max-progress-count");
-      if (countSpan) {
-        countSpan.textContent = `${uploaded}/${total}`;
-        countSpan.style.display = "inline";
-      } else {
-        toast.textContent = ` ${uploaded}/${total}`;
-      }
-      toast.style.display = "flex";
-    } else {
-      toast.style.display = "none";
-    }
-  } catch (e) {
-    // On error, hide to avoid stale display
-    toast.style.display = "none";
-  }
-}
-
-/**
- * Check campaigns and pause workflow if none pending
- */
-async function checkAndPauseIfNoPendingCampaigns(): Promise<void> {
-  try {
-    const result = await chrome.storage.local.get([
-      "gmv_max_campaign_data",
-      "gmv_max_upload_success_status",
-    ]);
-
-    const campaigns: Array<{ name: string; id: string }> = result.gmv_max_campaign_data || [];
-    const successStatuses: Record<string, { status: string }> = result.gmv_max_upload_success_status || {};
-
-    const total = campaigns.length;
-    const uploaded = total === 0 ? 0 : campaigns.filter((c) => successStatuses[c.name]?.status === "success").length;
-    const hasPending = total > 0 && uploaded < total;
-
-    if (!hasPending) {
-      // No campaigns or all completed -> pause
-      isAutoNavigationPaused = true;
-      chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: true });
-      updateControlButtons();
-      updateUploadStatusToast("idle");
-      console.log("[GMV Max Navigator] No pending campaigns. Workflow paused.");
-    }
-  } catch (e) {
-    // Ignore errors, do not force resume
-  }
-}
-
-/**
- * Update control buttons visibility and state
- */
-async function updateControlButtons(): Promise<void> {
-  const stopButton = document.getElementById("gmv-max-stop-btn") as HTMLButtonElement | null;
-  const resumeButton = document.getElementById("gmv-max-resume-btn") as HTMLButtonElement | null;
-
-  if (stopButton && resumeButton) {
-    // Check if campaigns and date range are configured
-    const result = await chrome.storage.local.get([
-      "gmv_max_campaign_data",
-      "gmv_max_upload_success_status",
-      "gmv_max_date_range",
-    ]);
-    const campaigns = result.gmv_max_campaign_data || [];
-    const dateRange = result.gmv_max_date_range;
-    const successStatuses: Record<string, { status: string }> = result.gmv_max_upload_success_status || {};
-    const isConfigured = campaigns.length > 0 && dateRange;
-
-    // Check if progress is full (all campaigns uploaded)
-    const total = campaigns.length;
-    const uploaded = total === 0 ? 0 : campaigns.filter((c: { name: string }) => successStatuses[c.name]?.status === "success").length;
-    const isProgressFull = total > 0 && uploaded === total;
-
-    // Disable buttons if not configured OR if progress is full
-    const shouldDisable = !isConfigured || isProgressFull;
-    stopButton.disabled = shouldDisable;
-    resumeButton.disabled = shouldDisable;
-
-    // Update opacity to show disabled state
-    if (shouldDisable) {
-      stopButton.style.opacity = "0.5";
-      stopButton.style.cursor = "not-allowed";
-      resumeButton.style.opacity = "0.5";
-      resumeButton.style.cursor = "not-allowed";
-    } else {
-      stopButton.style.opacity = "1";
-      stopButton.style.cursor = "pointer";
-      resumeButton.style.opacity = "1";
-      resumeButton.style.cursor = "pointer";
-    }
-
-    // Update visibility based on paused state
-    if (isAutoNavigationPaused) {
-      stopButton.style.display = "none";
-      resumeButton.style.display = "flex";
-    } else {
-      stopButton.style.display = "flex";
-      resumeButton.style.display = "none";
-    }
-  }
-}
-
-/**
- * Update navigation buttons state based on current configuration
- */
-async function updateNavigationButtons(): Promise<void> {
-  const prevButton = document.getElementById("gmv-max-prev-campaign-btn") as HTMLButtonElement | null;
-  const nextButton = document.getElementById("gmv-max-next-campaign-btn") as HTMLButtonElement | null;
-
-  if (prevButton && nextButton) {
-    // Check if campaigns and date range are configured
-    const result = await chrome.storage.local.get(["gmv_max_campaign_data", "gmv_max_date_range"]);
-    const campaigns = result.gmv_max_campaign_data || [];
-    const dateRange = result.gmv_max_date_range;
-    const isConfigured = campaigns.length > 0 && dateRange;
-
-    // Disable buttons if not configured
-    const shouldDisable = !isConfigured;
-
-    // Update button states
-    prevButton.disabled = shouldDisable;
-    prevButton.style.opacity = shouldDisable ? "0.5" : "1";
-    prevButton.style.cursor = shouldDisable ? "not-allowed" : "pointer";
-
-    nextButton.disabled = shouldDisable;
-    nextButton.style.opacity = shouldDisable ? "0.5" : "1";
-    nextButton.style.cursor = shouldDisable ? "not-allowed" : "pointer";
-
-    console.log("[GMV Max Navigator] Navigation buttons state updated:", { isConfigured });
-  }
-}
-
-/**
- * Inject stop and resume control buttons
- * Always visible, but disabled when campaigns are not configured
- */
-async function injectControlButtons(): Promise<void> {
-  // Check if buttons already exist
-  if (document.getElementById("gmv-max-stop-btn") || document.getElementById("gmv-max-resume-btn")) {
-    return;
-  }
-
-  // Create Stop button
-  const stopButton = document.createElement("button");
-  stopButton.id = "gmv-max-stop-btn";
-  stopButton.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  // Pause button
+  const pauseBtn = document.createElement("button");
+  pauseBtn.id = "naversa-pause-btn";
+  pauseBtn.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <rect x="6" y="6" width="12" height="12"></rect>
     </svg>
     <span>일시정지</span>
   `;
-
-  stopButton.style.cssText = `
+  pauseBtn.style.cssText = `
     position: fixed;
-    bottom: 85px;
+    bottom: 32px;
     right: 32px;
-    width: 150px;
+    width: 120px;
     height: 40px;
     z-index: 10000;
     background: red;
     color: white;
     border: 2px solid black;
     box-shadow: 0.2rem 0.2rem 0 0 black;
-    padding: 12px 18px;
-    font-size: 14px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    cursor: pointer;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  `;
-
-  // Create Resume button
-  const resumeButton = document.createElement("button");
-  resumeButton.id = "gmv-max-resume-btn";
-  resumeButton.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <polygon points="5 3 19 12 5 21 5 3"></polygon>
-    </svg>
-    <span>재개</span>
-  `;
-
-  resumeButton.style.cssText = `
-    position: fixed;
-    bottom: 85px;
-    right: 32px;
-    width: 150px;
-    height: 40px;
-    z-index: 10000;
-    background: #22c55e;
-    border: 2px solid black;
-    box-shadow: 0.2rem 0.2rem 0 0 black;
-    padding: 12px 18px;
+    padding: 8px 12px;
     font-size: 14px;
     font-weight: 600;
     display: none;
     align-items: center;
+    justify-content: center;
     gap: 6px;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     cursor: pointer;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    color: white;
   `;
 
-  // Add hover effects for Stop button
-  stopButton.addEventListener("mouseenter", () => {
-    stopButton.style.boxShadow = "none";
-  });
+  // Resume button
+  const resumeBtn = document.createElement("button");
+  resumeBtn.id = "naversa-resume-btn";
+  resumeBtn.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="5 3 19 12 5 21 5 3"></polygon>
+    </svg>
+    <span>재개</span>
+  `;
+  resumeBtn.style.cssText = `
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    width: 120px;
+    height: 40px;
+    z-index: 10000;
+    background: #22c55e;
+    color: white;
+    border: 2px solid black;
+    box-shadow: 0.2rem 0.2rem 0 0 black;
+    padding: 8px 12px;
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  `;
 
-  stopButton.addEventListener("mouseleave", () => {
-    stopButton.style.boxShadow = "0.2rem 0.2rem 0 0 black";
-  });
-
-  // Add hover effects for Resume button
-  resumeButton.addEventListener("mouseenter", () => {
-    resumeButton.style.boxShadow = "none";
-  });
-
-  resumeButton.addEventListener("mouseleave", () => {
-    resumeButton.style.boxShadow = "0.2rem 0.2rem 0 0 black";
-  });
-
-  // Stop button click handler
-  stopButton.addEventListener("click", async () => {
-    if (stopButton.disabled) return;
-    isAutoNavigationPaused = true;
-
-    // Persist workflow paused state to localStorage
+  // Event handlers
+  pauseBtn.onclick = () => {
+    isWorkflowPaused = true;
     chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: true });
-
-    await updateControlButtons();
-    console.log("[GMV Max Navigator] Auto-navigation paused");
-    updateUploadStatusToast("idle");
-  });
-
-  // Resume button click handler
-  resumeButton.addEventListener("click", async () => {
-    if (resumeButton.disabled) return;
-
-    console.log("[GMV Max Navigator] Auto-navigation resumed, navigating to first campaign");
-    isAutoNavigationPaused = false;
-
-    // Persist workflow resumed state to localStorage
-    chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: false });
-
-    // Reset the click flag to allow clicking again
-    hasClickedExportButton = false;
-
-    // Navigate to the first uncompleted campaign
-    await goToFirstCampaign();
-
-    // Update control buttons to show stop button
     updateControlButtons();
+    showToast("워크플로우 일시정지됨", "info");
+  };
 
-    // Enable navigation buttons
-    updateNavigationButtons();
-  });
+  resumeBtn.onclick = () => {
+    isWorkflowPaused = false;
+    chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: false });
+    updateControlButtons();
+    showToast("워크플로우 재개됨", "success");
+    executeWorkflow();
+  };
 
-  // Inject buttons
-  document.body.appendChild(stopButton);
-  document.body.appendChild(resumeButton);
-  console.log("[GMV Max Navigator] Control buttons injected");
+  document.body.appendChild(pauseBtn);
+  document.body.appendChild(resumeBtn);
 
-  // Set initial button visibility based on paused state
   updateControlButtons();
 }
 
 /**
- * Inject floating navigation buttons (Prev/Next) into the page
- * Always visible, but disabled when campaigns are not configured
+ * Update button visibility based on paused state
  */
-async function injectNavigationButtons(): Promise<void> {
-  // Check if buttons already exist
-  if (document.getElementById("gmv-max-prev-campaign-btn") || document.getElementById("gmv-max-next-campaign-btn")) {
-    return;
+function updateControlButtons(): void {
+  const pauseBtn = document.getElementById("naversa-pause-btn");
+  const resumeBtn = document.getElementById("naversa-resume-btn");
+
+  if (pauseBtn && resumeBtn) {
+    if (isWorkflowPaused) {
+      pauseBtn.style.display = "none";
+      resumeBtn.style.display = "flex";
+    } else {
+      pauseBtn.style.display = "flex";
+      resumeBtn.style.display = "none";
+    }
   }
-
-  // Check if campaigns and date range are configured
-  const result = await chrome.storage.local.get(["gmv_max_campaign_data", "gmv_max_date_range"]);
-  const campaigns = result.gmv_max_campaign_data || [];
-  const dateRange = result.gmv_max_date_range;
-  const isConfigured = campaigns.length > 0 && dateRange;
-
-  // Create container for buttons
-  const container = document.createElement("div");
-  container.id = "gmv-max-navigation-container";
-  container.style.cssText = `
-    position: fixed;
-    bottom: 32px;
-    right: 32px;
-    z-index: 10000;
-    display: flex;
-    gap: 4px;
-    width: 150px;
-  `;
-
-  // Create Prev button
-  const prevButton = document.createElement("button");
-  prevButton.id = "gmv-max-prev-campaign-btn";
-  prevButton.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="15 18 9 12 15 6"></polyline>
-    </svg>
-  `;
-
-  // Set initial disabled state
-  prevButton.disabled = !isConfigured;
-
-  // Add styles for prev button
-  prevButton.style.cssText = `
-    flex: 1;
-    background: white;
-    color: black;
-    border: 2px solid black;
-    box-shadow: 0.2rem 0.2rem 0 0 black;
-    padding: 12px;
-    font-size: 15px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    cursor: ${isConfigured ? "pointer" : "not-allowed"};
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    opacity: ${isConfigured ? "1" : "0.5"};
-  `;
-
-  // Create Next button
-  const nextButton = document.createElement("button");
-  nextButton.id = "gmv-max-next-campaign-btn";
-  nextButton.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="9 18 15 12 9 6"></polyline>
-    </svg>
-  `;
-
-  // Set initial disabled state
-  nextButton.disabled = !isConfigured;
-
-  // Add styles for next button
-  nextButton.style.cssText = `
-    flex: 1;
-    background: black;
-    color: white;
-    border: 2px solid black;
-    box-shadow: 0.2rem 0.2rem 0 0 black;
-    padding: 12px;
-    font-size: 15px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    cursor: ${isConfigured ? "pointer" : "not-allowed"};
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    opacity: ${isConfigured ? "1" : "0.5"};
-  `;
-
-  // Add hover effects for prev button
-  prevButton.addEventListener("mouseenter", () => {
-    if (!prevButton.disabled) {
-      prevButton.style.boxShadow = "none";
-    }
-  });
-
-  prevButton.addEventListener("mouseleave", () => {
-    if (!prevButton.disabled) {
-      prevButton.style.boxShadow = "0.2rem 0.2rem 0 0 black";
-    }
-  });
-
-  // Add hover effects for next button
-  nextButton.addEventListener("mouseenter", () => {
-    if (!nextButton.disabled) {
-      nextButton.style.boxShadow = "none";
-    }
-  });
-
-  nextButton.addEventListener("mouseleave", () => {
-    if (!nextButton.disabled) {
-      nextButton.style.boxShadow = "0.2rem 0.2rem 0 0 black";
-    }
-  });
-
-  // Add click handler for prev button
-  prevButton.addEventListener("click", async () => {
-    if (prevButton.disabled) return;
-
-    const originalDisabled = prevButton.disabled;
-    prevButton.disabled = true;
-    prevButton.style.opacity = "0.6";
-    prevButton.style.cursor = "not-allowed";
-
-    try {
-      await goToPrevCampaign();
-    } finally {
-      prevButton.disabled = originalDisabled;
-      prevButton.style.opacity = isConfigured ? "1" : "0.5";
-      prevButton.style.cursor = isConfigured ? "pointer" : "not-allowed";
-    }
-  });
-
-  // Add click handler for next button
-  nextButton.addEventListener("click", async () => {
-    if (nextButton.disabled) return;
-
-    const originalDisabled = nextButton.disabled;
-    nextButton.disabled = true;
-    nextButton.style.opacity = "0.6";
-    nextButton.style.cursor = "not-allowed";
-
-    try {
-      await goToNextCampaign();
-    } finally {
-      nextButton.disabled = originalDisabled;
-      nextButton.style.opacity = isConfigured ? "1" : "0.5";
-      nextButton.style.cursor = isConfigured ? "pointer" : "not-allowed";
-    }
-  });
-
-  // Append buttons to container
-  container.appendChild(prevButton);
-  container.appendChild(nextButton);
-
-  // Inject container into page
-  document.body.appendChild(container);
-  console.log("[GMV Max Navigator] Navigation buttons injected");
 }
 
 /**
- * Toggle visibility of all injected UI elements
+ * Listen for messages from background script
  */
-function setButtonsVisibility(visible: boolean): void {
-  const elements = [
-    document.getElementById("gmv-max-navigation-container"),
-    document.getElementById("gmv-max-upload-status-toast"),
-    document.getElementById("gmv-max-date-display"),
-    document.getElementById("gmv-max-progress-toast"),
-    document.getElementById("gmv-max-stop-btn"),
-    document.getElementById("gmv-max-resume-btn"),
-  ];
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Handle READ_DOWNLOADED_FILE request from background script
+  // Reads the downloaded file content using File System Access API
+  if (message.type === "READ_DOWNLOADED_FILE") {
+    console.log("[NaverSA] Received READ_DOWNLOADED_FILE request, downloadId:", message.downloadId);
 
-  elements.forEach((element) => {
-    if (element) {
-      if (visible) {
-        // Restore original display value
-        if (element.hasAttribute("data-original-display")) {
-          const originalDisplay = element.getAttribute("data-original-display") || "flex";
-          element.style.display = originalDisplay;
-          element.removeAttribute("data-original-display");
-        } else {
-          // If no stored value, set appropriate default
-          // For control buttons (stop/resume), let updateControlButtons handle visibility
-          if (element.id === "gmv-max-stop-btn" || element.id === "gmv-max-resume-btn") {
-            // Don't set display here - updateControlButtons will handle it
-            element.style.removeProperty("display");
-          } else {
-            // For other elements, default to flex
-            element.style.display = "flex";
-          }
-        }
-      } else {
-        // Store current computed display value before hiding
-        const computedDisplay = window.getComputedStyle(element).display;
-        if (computedDisplay !== "none") {
-          element.setAttribute("data-original-display", computedDisplay);
-        } else {
-          // If element is already hidden, store empty string to indicate it should stay hidden
-          element.setAttribute("data-original-display", "none");
-        }
-        element.style.display = "none";
+    // Use chrome.downloads API to get file info
+    chrome.downloads.search({ id: message.downloadId }, async (downloads) => {
+      if (!downloads || downloads.length === 0) {
+        sendResponse({
+          success: false,
+          error: "Download not found"
+        });
+        return;
       }
-    }
-  });
 
-  // After restoring visibility, update control buttons to ensure correct stop/resume button is shown
-  if (visible) {
-    updateControlButtons();
-    updateNavigationButtons();
-  }
+      const download = downloads[0];
+      console.log("[NaverSA] Download found:", download.filename);
 
-  console.log(`[GMV Max Navigator] Buttons visibility set to: ${visible}`);
-}
+      // The file is already downloaded. We need to read it.
+      // Since Chrome extensions can't directly read files from disk,
+      // we'll use chrome.downloads.show() to open the file, then read it from the page
+      // Or use File System Access API (but requires user interaction)
 
-/**
- * Listen for messages from popup and background script
- */
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === "TOGGLE_BUTTONS_VISIBILITY") {
-    console.log("[GMV Max Navigator] Received toggle visibility message:", message.visible);
-    setButtonsVisibility(message.visible);
-    return;
-  }
+      // Best approach: Open the file using chrome.downloads.show()
+      // This will open it in a new tab if it's a text file
+      // Then we can read it from there
 
-  if (message.type === "UPLOAD_STATUS") {
-    console.log("[GMV Max Navigator] Received upload status:", message);
+      try {
+        // Open the downloaded file
+        chrome.downloads.show(download.id);
 
-    // Get campaign info from current URL to check if this status update is for the current campaign
-    const campaignId = getCampaignIdFromUrl();
-    if (!campaignId) return;
+        // Wait a moment for the file to open
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
-    getCampaignName(campaignId).then((campaignName) => {
-      // Only show status if it's for the current campaign
-      if (campaignName === message.campaignName) {
-        switch (message.status) {
-          case "started":
-            updateUploadStatusToast("uploading", "업로드 중...");
-            updateProgressToast();
-            break;
-          case "success":
-            updateUploadStatusToast("success", "업로드 완료");
+        // Try to read the file using File System Access API
+        // This requires user interaction, so we'll need to prompt
+        // Actually, let's try a different approach: use fetch with the blob URL
+        // But blob URLs are only valid in the context where they were created
 
-            // Persist success to chrome.storage so progress stays accurate even if popup is closed
-            chrome.storage.local.get(["gmv_max_upload_success_status"], (result) => {
-              const successStatuses = result.gmv_max_upload_success_status || {};
-              successStatuses[message.campaignName] = { status: "success" } as any;
-              chrome.storage.local.set({ gmv_max_upload_success_status: successStatuses }, () => {
-                updateProgressToast();
-              });
+        // Alternative: Create a file input and try to read it
+        // But we can't set the file path programmatically
+
+        // Actually, the best solution is to use chrome.downloads API
+        // to get the file and then read it via a content script injected into
+        // the file:// URL, but that's blocked
+
+        // For now, let's use the File System Access API
+        // We'll need to show a file picker, but we can make it default to the downloads folder
+        if ('showOpenFilePicker' in window) {
+          try {
+            // @ts-ignore - File System Access API
+            const [fileHandle] = await window.showOpenFilePicker({
+              suggestedName: download.filename,
+              types: [{
+                description: 'TSV files',
+                accept: { 'text/tab-separated-values': ['.tsv'] }
+              }]
             });
 
-            // Auto-click "Next Campaign" button after successful upload (only if not paused)
-            if (!isAutoNavigationPaused) {
-              console.log(`[GMV Max Navigator] Upload successful, auto-clicking next campaign button in ${AUTO_NAVIGATION_DELAY / 1000} seconds...`);
-              setTimeout(() => {
-                // Check again if still not paused (user might have clicked stop during delay)
-                if (!isAutoNavigationPaused) {
-                  const nextButton = document.getElementById("gmv-max-next-campaign-btn") as HTMLButtonElement;
-                  if (nextButton) {
-                    console.log("[GMV Max Navigator] Auto-clicking next campaign button");
-                    nextButton.click();
-                  } else {
-                    console.warn("[GMV Max Navigator] Next campaign button not found");
-                  }
-                } else {
-                  console.log("[GMV Max Navigator] Auto-navigation is paused, skipping auto-click");
-                }
-              }, AUTO_NAVIGATION_DELAY);
-            } else {
-              console.log("[GMV Max Navigator] Auto-navigation is paused, skipping auto-click");
-            }
-            break;
-          case "error":
-            updateUploadStatusToast("error", `업로드 실패: ${message.error || "알 수 없는 오류"}`);
-            updateProgressToast();
-            break;
+            const file = await fileHandle.getFile();
+            const content = await file.text();
+
+            console.log("[NaverSA] ✅ Successfully read file content, length:", content.length);
+            sendResponse({
+              success: true,
+              content: content
+            });
+          } catch (pickerError) {
+            console.error("[NaverSA] File picker error:", pickerError);
+            // User cancelled or error
+            sendResponse({
+              success: false,
+              error: "File picker was cancelled or failed. Please try again."
+            });
+          }
+        } else {
+          // Fallback: File System Access API not available
+          // We'll need to ask the user to manually select the file
+          sendResponse({
+            success: false,
+            error: "File System Access API not available. Please manually select the downloaded TSV file."
+          });
         }
+      } catch (error) {
+        console.error("[NaverSA] Error reading file:", error);
+        sendResponse({
+          success: false,
+          error: `Failed to read file: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
       }
     });
+
+    return true; // Keep message channel open for async response
   }
-});
 
-/**
- * Listen for storage changes and update button states accordingly
- */
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === "local") {
-    // Check if campaign data changed
-    if (changes["gmv_max_campaign_data"]) {
-      console.log("[GMV Max Navigator] Configuration changed, updating button states");
+  // Handle FETCH_TSV_URL request from background script (legacy, may not be needed)
+  // This allows background to use content script's session cookies
+  if (message.type === "FETCH_TSV_URL") {
+    // Get the URL to fetch - use stored original URL if blob URL was provided
+    let urlToFetch = message.url;
 
-      // Update all buttons that depend on configuration
-      updateNavigationButtons();
-      updateControlButtons();
-    }
+    if (message.useStoredUrl || !urlToFetch || urlToFetch.startsWith('blob:')) {
+      // If it's a blob URL or we're told to use stored URL, get the original URL from sessionStorage
+      let storedUrl = sessionStorage.getItem('naversa_original_download_url');
 
-    // Update progress when relevant storage keys change
-    if (changes["gmv_max_campaign_data"] || changes["gmv_max_upload_success_status"]) {
-      updateProgressToast();
-      // Auto-pause when everything is completed or no campaigns exist
-      checkAndPauseIfNoPendingCampaigns();
-    }
+      // Fallback: Try to extract URL from the page if stored URL is missing
+      if (!storedUrl) {
+        console.log("[NaverSA] Stored URL not found, trying to extract from page...");
+        const table = document.querySelector('table');
+        const tbody = table?.querySelector('tbody');
+        const firstRow = tbody?.querySelector('tr');
+        if (firstRow) {
+          // First try to get href from download link
+          const downloadLink = firstRow.querySelector('a[href]') as HTMLAnchorElement;
+          if (downloadLink) {
+            const href = downloadLink.getAttribute('href');
+            if (href && href !== "#/" && !href.startsWith('javascript:') && !href.startsWith('blob:')) {
+              storedUrl = href.startsWith('/')
+                ? `https://manage.searchad.naver.com${href}`
+                : href.startsWith('http') ? href : `https://manage.searchad.naver.com/${href}`;
+              console.log("[NaverSA] Extracted URL from link href:", storedUrl);
+            }
+          }
 
-    // Update date display when date range changes
-    if (changes["gmv_max_date_range"]) {
-      updateDateDisplay();
-      // Also update button states since date range affects their enabled state
-      updateNavigationButtons();
-      updateControlButtons();
-    }
+          // If no URL from link, try data-value
+          if (!storedUrl) {
+            const dataValueElement = firstRow.querySelector('[data-value]') as HTMLElement;
+            if (dataValueElement) {
+              const dataValue = dataValueElement.getAttribute('data-value');
+              if (dataValue && dataValue !== "-") {
+                // Construct URL from data-value (might be ID or path)
+                if (dataValue.startsWith('/')) {
+                  storedUrl = `https://manage.searchad.naver.com${dataValue}`;
+                } else if (/^\d+$/.test(dataValue)) {
+                  // Numeric ID - construct download URL
+                  storedUrl = `https://manage.searchad.naver.com/report-download/${dataValue}`;
+                  console.log("[NaverSA] Constructed URL from ID:", storedUrl);
+                } else if (dataValue.startsWith('http')) {
+                  storedUrl = dataValue;
+                } else {
+                  storedUrl = `https://manage.searchad.naver.com/${dataValue}`;
+                }
+                console.log("[NaverSA] Extracted URL from data-value:", storedUrl);
+              }
+            }
+          }
 
-    // Sync workflow paused state with popup
-    if (changes[STORAGE_KEYS.WORKFLOW_PAUSED]) {
-      const newPausedState = changes[STORAGE_KEYS.WORKFLOW_PAUSED].newValue;
-      isAutoNavigationPaused = newPausedState !== false;
-      console.log("[GMV Max Navigator] Workflow paused state synced from storage:", isAutoNavigationPaused);
-      updateControlButtons();
-    }
-  }
-});
-
-/**
- * Initialize auto-click functionality
- * Checks if feature is enabled in storage before attempting
- */
-async function initialize() {
-  try {
-    // Check if we're on the correct URL
-    const urlPattern = /ads\.tiktok\.com\/i18n\/gmv-max\/dashboard/;
-    if (!urlPattern.test(window.location.href)) {
-      console.log("[GMV Max Navigator] Not on GMV Max dashboard page");
-      return;
-    }
-
-    console.log("[GMV Max Navigator] Initializing on GMV Max dashboard");
-
-    // Restore paused/resumed state from storage (default to paused)
-    try {
-      const storedState = await chrome.storage.local.get([STORAGE_KEYS.WORKFLOW_PAUSED]);
-      // If explicitly set to false, it means resumed; otherwise treat as paused by default
-      isAutoNavigationPaused = storedState[STORAGE_KEYS.WORKFLOW_PAUSED] !== false;
-      console.log("[GMV Max Navigator] Restored paused state:", isAutoNavigationPaused);
-    } catch (e) {
-      console.warn("[GMV Max Navigator] Failed to restore paused state, defaulting to paused");
-      isAutoNavigationPaused = true;
-    }
-
-    // Inject UI elements (always visible, disabled if not configured)
-    await injectNavigationButtons();
-    await injectUploadStatusToast();
-    await injectDateDisplayBox();
-    await injectProgressToast();
-    await injectControlButtons();
-
-    // Ensure paused when there are no campaigns to upload
-    await checkAndPauseIfNoPendingCampaigns();
-
-    // Load and apply button visibility state
-    try {
-      const visibilityResult = await chrome.storage.local.get([STORAGE_KEYS.BUTTONS_VISIBLE]);
-      const isVisible = visibilityResult[STORAGE_KEYS.BUTTONS_VISIBLE];
-
-      // Default to true if not set
-      if (isVisible === false) {
-        setButtonsVisibility(false);
-      }
-    } catch (e) {
-      console.warn("[GMV Max Navigator] Failed to load button visibility state");
-    }
-
-    // Check if auto-click is enabled
-    const result = await chrome.storage.local.get([STORAGE_KEY]);
-    const isEnabled = result[STORAGE_KEY] !== false; // Default to true
-
-    if (!isEnabled) {
-      console.log("[GMV Max Navigator] Auto-click is disabled");
-      return;
-    }
-
-    console.log("[GMV Max Navigator] Auto-click is enabled");
-
-    // Only start auto-click if not paused
-    if (!isAutoNavigationPaused) {
-      console.log("[GMV Max Navigator] Starting auto-click workflow");
-
-      // Start attempting to click the button
-      attemptAutoClick();
-
-      // Also observe for dynamic content changes
-      const observer = new MutationObserver((mutations) => {
-        // Check if any mutations added nodes
-        const hasNewNodes = mutations.some(mutation => mutation.addedNodes.length > 0);
-
-        if (hasNewNodes) {
-          // Debounce: only check once after changes settle
-          const clicked = findAndClickExportButton();
-          if (clicked) {
-            observer.disconnect(); // Stop observing once we've clicked
+          // Store it for future use
+          if (storedUrl && !storedUrl.startsWith('blob:')) {
+            sessionStorage.setItem('naversa_original_download_url', storedUrl);
+            console.log("[NaverSA] Extracted and stored URL from page:", storedUrl);
           }
         }
-      });
+      }
 
-      // Observe the entire document for changes
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-      });
-
-      // Disconnect observer after a reasonable time to avoid memory leaks
-      setTimeout(() => observer.disconnect(), 30000); // 30 seconds
-    } else {
-      console.log("[GMV Max Navigator] Auto-click workflow is paused, waiting for user to resume");
+      if (storedUrl && !storedUrl.startsWith('blob:')) {
+        urlToFetch = storedUrl;
+        console.log("[NaverSA] Using stored/extracted original URL instead of blob URL:", urlToFetch);
+      } else {
+        console.error("[NaverSA] No valid original URL found and blob URL provided");
+        sendResponse({
+          success: false,
+          error: "No original download URL available. The download link may have expired. Please try downloading again."
+        });
+        return true;
+      }
     }
 
-  } catch (error) {
-    console.error("[GMV Max Navigator] Error in auto-click initialization:", error);
+    console.log("[NaverSA] Received FETCH_TSV_URL request from background, URL:", urlToFetch);
+
+    // Fetch the URL with content script's session context
+    fetch(urlToFetch, {
+      method: 'GET',
+      credentials: 'include', // Include cookies for authentication
+      redirect: 'follow',
+      headers: {
+        'Accept': 'text/tab-separated-values, text/plain, */*',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Referer': window.location.href,
+        'User-Agent': navigator.userAgent,
+      }
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+        }
+
+        const content = await response.text();
+
+        // Validate it's TSV, not HTML
+        const trimmedContent = content.trim();
+        const isHTML =
+          trimmedContent.toLowerCase().startsWith('<!doctype') ||
+          trimmedContent.toLowerCase().startsWith('<html') ||
+          trimmedContent.toLowerCase().includes('<!doctype html') ||
+          trimmedContent.toLowerCase().includes('<html lang') ||
+          trimmedContent.toLowerCase().includes('<head>') ||
+          trimmedContent.toLowerCase().includes('<body>') ||
+          (trimmedContent.startsWith('<') && trimmedContent.includes('html'));
+
+        if (isHTML) {
+          console.error("[NaverSA] ❌ Received HTML instead of TSV from URL fetch");
+          sendResponse({
+            success: false,
+            error: "Received HTML page instead of TSV file. The download URL may require additional authentication."
+          });
+          return;
+        }
+
+        // Validate TSV format
+        if (!content.includes('\t')) {
+          console.error("[NaverSA] ❌ Content doesn't contain tabs - not valid TSV");
+          sendResponse({
+            success: false,
+            error: "Content does not appear to be TSV format (no tab characters found)."
+          });
+          return;
+        }
+
+        console.log("[NaverSA] ✅ Successfully fetched TSV content via content script, length:", content.length);
+        sendResponse({
+          success: true,
+          content: content
+        });
+      })
+      .catch((error) => {
+        console.error("[NaverSA] Failed to fetch TSV URL:", error);
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+      });
+
+    return true; // Keep message channel open for async response
+  }
+});
+
+/**
+ * Initialize content script
+ */
+async function initialize(): Promise<void> {
+  // Check if we're on the correct page
+  if (!window.location.href.includes("manage.searchad.naver.com") ||
+      !window.location.href.includes("reports-download")) {
+    console.log("[NaverSA] Not on reports download page");
+    return;
+  }
+
+  console.log("[NaverSA] Initializing on Naver SearchAd reports page");
+
+  // Restore paused state
+  const result = await chrome.storage.local.get([STORAGE_KEYS.WORKFLOW_PAUSED]);
+  isWorkflowPaused = result[STORAGE_KEYS.WORKFLOW_PAUSED] !== false; // Default to paused
+
+  // Inject UI
+  injectUI();
+
+  // Check if this is a page refresh (part of workflow)
+  const wasPolling = sessionStorage.getItem("naversa_polling") === "true";
+
+  if (wasPolling) {
+    console.log("[NaverSA] Detected page refresh, continuing workflow...");
+    sessionStorage.removeItem("naversa_polling");
+    await continueWorkflowAfterRefresh();
+  } else {
+    console.log("[NaverSA] Fresh page load, workflow paused by default");
   }
 }
 

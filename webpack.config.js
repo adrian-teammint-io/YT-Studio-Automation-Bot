@@ -29,7 +29,10 @@ module.exports = (env, argv) => {
             configFile: "tsconfig.extension.json",
           },
         },
-        exclude: /node_modules/,
+        exclude: [
+          /node_modules/,
+          /-esm\.ts$/, // Exclude ESM-specific files (for standalone Node.js scripts)
+        ],
       },
       {
         test: /\.css$/,

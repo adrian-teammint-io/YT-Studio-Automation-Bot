@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "[team-mint.io] GMV Max Automation Bot",
-  "version": "0.1.1",
-  "description": "캠페인 보고서 자동 업로드 봇입니다.",
+  "name": "[team-mint.io] NaverSA Automation Bot",
+  "version": "0.1.0",
+  "description": "Naver SearchAd 보고서 자동 다운로드 및 Google Sheets 업로드 봇입니다.",
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -16,7 +16,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://ads.tiktok.com/i18n/gmv-max/dashboard*"],
+      "matches": ["https://manage.searchad.naver.com/customers/*/reports-download*"],
       "js": ["content.js"],
       "run_at": "document_end"
     }

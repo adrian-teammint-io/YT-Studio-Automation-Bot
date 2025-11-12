@@ -1,125 +1,16 @@
-// Background service worker for Chrome extension
+// Background service worker for NaverSA Chrome extension
 
-import { uploadToGoogleDrive, type GoogleDriveConfig, getAuthToken } from "./services/google-drive";
-import { detectRegionFromCampaign, validateSharedDriveFolders } from "./utils/region-detector";
-
-interface Todo {
-  id: string;
-  text: string;
-  completed: boolean;
-}
-
-interface UploadRequest {
-  campaignName: string;
-  fileName: string;
-  fileUrl: string;
-  folderId?: string; // Optional: direct folder ID to upload to
-}
+import { STORAGE_KEYS } from "./constants/storage";
+import { uploadTSVToSheets, validateTSVContent, logTSVStats } from "./utils/tsv-processor";
 
 interface UploadStatusMessage {
   type: "UPLOAD_STATUS";
   status: "started" | "success" | "error";
-  campaignName: string;
-  fileName?: string;
   error?: string;
 }
 
-// Update badge when todos change
-function updateBadge() {
-  chrome.storage.local.get(["todos"], (result) => {
-    const todos: Todo[] = result.todos || [];
-    const incompleteCount = todos.filter((todo) => !todo.completed).length;
-
-    if (incompleteCount > 0) {
-      chrome.action.setBadgeText({ text: incompleteCount.toString() });
-      chrome.action.setBadgeBackgroundColor({ color: "#6366f1" }); // Indigo color
-    } else {
-      chrome.action.setBadgeText({ text: "" }); // Clear badge when no incomplete tasks
-    }
-  });
-}
-
 /**
- * Handle file upload to Google Drive
- * Orchestrates region detection, file download, and Drive upload
- */
-async function handleFileUpload(request: UploadRequest): Promise<void> {
-  const { campaignName, fileName, fileUrl, folderId } = request;
-
-  console.log("[Background] Starting file upload process:", { campaignName, fileName, folderId });
-
-  // Send "started" status to popup
-  broadcastUploadStatus({
-    type: "UPLOAD_STATUS",
-    status: "started",
-    campaignName,
-  });
-
-  try {
-    // Step 1: Detect region from campaign name (if folder ID not provided)
-    let parentFolderId: string;
-
-    if (folderId) {
-      // Use provided folder ID directly
-      console.log("[Background] Using provided folder ID:", folderId);
-      parentFolderId = ""; // Not needed when using direct folderId
-    } else {
-      // Detect region from campaign name
-      const regionInfo = detectRegionFromCampaign(campaignName);
-      if (!regionInfo) {
-        throw new Error(`Could not detect region from campaign name: ${campaignName}`);
-      }
-      console.log("[Background] Region detected:", regionInfo);
-      parentFolderId = regionInfo.folderId;
-    }
-
-    // Step 2: Download the file as a Blob
-    console.log("[Background] Downloading file from:", fileUrl);
-    const response = await fetch(fileUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to download file: ${response.statusText}`);
-    }
-    const fileBlob = await response.blob();
-    console.log("[Background] File downloaded, size:", fileBlob.size);
-
-    // Step 3: Upload to Google Drive
-    const uploadConfig: GoogleDriveConfig = {
-      parentFolderId: folderId || parentFolderId,
-      ...(folderId ? { folderId } : { campaignFolderName: campaignName }),
-      fileName: fileName,
-      fileBlob: fileBlob,
-    };
-
-    const result = await uploadToGoogleDrive(uploadConfig);
-
-    if (!result.success) {
-      throw new Error(result.error || "Upload failed");
-    }
-
-    console.log("[Background] Upload successful:", result);
-
-    // Send "success" status to popup
-    broadcastUploadStatus({
-      type: "UPLOAD_STATUS",
-      status: "success",
-      campaignName,
-      fileName: result.fileName,
-    });
-  } catch (error) {
-    console.error("[Background] Upload failed:", error);
-
-    // Send "error" status to popup
-    broadcastUploadStatus({
-      type: "UPLOAD_STATUS",
-      status: "error",
-      campaignName,
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-}
-
-/**
- * Broadcast upload status to all listening contexts (popup, content scripts)
+ * Broadcast upload status to content script
  */
 function broadcastUploadStatus(message: UploadStatusMessage): void {
   // Send to all tabs (content scripts)
@@ -135,499 +26,289 @@ function broadcastUploadStatus(message: UploadStatusMessage): void {
 
   // Also store in chrome.storage for popup to read
   chrome.storage.local.set({
-    lastUploadStatus: message,
+    [STORAGE_KEYS.LAST_UPLOAD_STATUS]: message,
   });
 }
 
 /**
- * Check recent downloads and trigger upload
+ * Process TSV upload to Google Sheets
+ * Receives TSV content from content script and uploads to sheet
  */
-async function checkAndUploadDownload(campaignName: string, campaignId: string, folderId?: string): Promise<void> {
-  console.log("[Background] Checking recent downloads for campaign:", campaignName, "folderId:", folderId);
+async function processTSVUpload(tsvContent: string, dateRange: any): Promise<void> {
+  console.log("[NaverSA Background] Processing TSV upload...");
+  console.log("[NaverSA Background] Received TSV content length:", tsvContent.length, "characters");
 
-  // Validate campaign name is not empty
-  if (!campaignName || campaignName.trim() === "") {
-    const errorMsg = `Campaign name is empty for campaign ID: ${campaignId}. Please check your campaign data in the extension settings.`;
-    console.error("[Background]", errorMsg);
+  // Send "started" status
+  broadcastUploadStatus({
+    type: "UPLOAD_STATUS",
+    status: "started",
+  });
+
+  try {
+    // Validate TSV content using shared utility
+    const validation = validateTSVContent(tsvContent);
+    if (!validation.isValid) {
+      console.error("[NaverSA Background] ❌ Invalid TSV content:", validation.error);
+      console.error("[NaverSA Background] Content preview:", tsvContent.substring(0, 500));
+      throw new Error(validation.error || "Invalid TSV content");
+    }
+
+    // Log TSV stats for debugging
+    logTSVStats(tsvContent, "Background Script");
+
+    // Upload using shared utility
+    console.log("[NaverSA Background] Uploading TSV content to Google Sheets...");
+    const result = await uploadTSVToSheets(tsvContent);
+
+    if (!result.success) {
+      throw new Error(result.error || "Upload failed");
+    }
+
+    console.log("[NaverSA Background] ✅ Upload successful!");
+    console.log("[NaverSA Background] - Updated range:", result.updatedRange);
+    console.log("[NaverSA Background] - Rows added:", result.updatedRows);
+
+    // Send "success" status
+    broadcastUploadStatus({
+      type: "UPLOAD_STATUS",
+      status: "success",
+    });
+  } catch (error) {
+    console.error("[NaverSA Background] Upload failed:", error);
+
+    // Send "error" status
     broadcastUploadStatus({
       type: "UPLOAD_STATUS",
       status: "error",
-      campaignName: campaignId, // Use campaignId as fallback
-      error: errorMsg,
+      error: error instanceof Error ? error.message : "Unknown error",
     });
-    throw new Error(errorMsg);
   }
+}
 
-  // STEP 0: Poll for download completion (smart wait with max 3 seconds)
-  // This ensures the file is downloaded before we check Drive or process uploads
-  console.log("[Background] Polling for download to complete...");
+// Store pending download info for interception
+let pendingDownloadId: number | null = null;
+let downloadUrlToFetch: string | null = null;
+let downloadCompleteCallbacks: Map<number, (content: string) => void> = new Map();
 
-  const MAX_POLL_TIME = 3000; // Maximum wait time in ms
-  const POLL_INTERVAL = 300; // Check every 300ms
-  const startTime = Date.now();
-  let downloadFound = false;
-
-  while (!downloadFound && (Date.now() - startTime) < MAX_POLL_TIME) {
-    // Check if download exists
-    const downloads = await new Promise<chrome.downloads.DownloadItem[]>((resolve) => {
-      chrome.downloads.search(
-        {
-          orderBy: ["-startTime"],
-          limit: 5,
-        },
-        (items) => resolve(items || [])
-      );
-    });
-
-    // Look for the campaign file
-    const campaignPattern = new RegExp(`Campaign ${campaignId}(?:\\s*\\(\\d+\\))?`);
-    const foundDownload = downloads.find(
-      (d) => d.filename.endsWith(".xlsx") &&
-             d.state === "complete" &&
-             campaignPattern.test(d.filename)
-    );
-
-    if (foundDownload) {
-      console.log(`[Background] Download found after ${Date.now() - startTime}ms`);
-      downloadFound = true;
-      break;
-    }
-
-    // Wait before next poll
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+// Listen for download events to intercept TSV downloads
+chrome.downloads.onCreated.addListener((downloadItem) => {
+  if (downloadItem.filename.endsWith('.tsv')) {
+    console.log("[NaverSA Background] TSV download detected:", downloadItem.id, downloadItem.url);
+    pendingDownloadId = downloadItem.id;
+    downloadUrlToFetch = downloadItem.url || null;
   }
+});
 
-  if (!downloadFound) {
-    console.log(`[Background] Download not found within ${MAX_POLL_TIME}ms, proceeding anyway`);
-  }
+chrome.downloads.onChanged.addListener(async (downloadDelta) => {
+  // When download completes, try to read the file content
+  if (pendingDownloadId === downloadDelta.id && downloadDelta.state?.current === 'complete') {
+    console.log("[NaverSA Background] TSV download completed:", downloadDelta.id);
 
-  // STEP 1: Check if file already exists in Google Drive (after download completes)
-  try {
-    console.log("[Background] STEP 1: Checking if file already exists in Google Drive...");
+    // Get the download item details
+    chrome.downloads.search({ id: downloadDelta.id }, async (downloads) => {
+      if (!downloads || downloads.length === 0) return;
 
-    // Get auth token
-    const token = await getAuthToken();
+      const download = downloads[0];
+      console.log("[NaverSA Background] Reading completed download:", download.filename);
 
-    // Determine target folder ID
-    let campaignFolderId: string | null = null;
+      // Try to read the file using the File API via a content script injection
+      // Since we can't read files directly, we'll use the download URL with proper timing
+      // The download URL should work immediately after the download completes
+      if (download.url) {
+        // Wait a moment for the download to fully complete
+        await new Promise(resolve => setTimeout(resolve, 500));
 
-    if (folderId) {
-      // Use provided folder ID directly
-      console.log("[Background] Using provided folder ID:", folderId);
-      campaignFolderId = folderId;
-    } else {
-      // Detect region to get the correct folder
-      const regionInfo = detectRegionFromCampaign(campaignName);
-      if (!regionInfo) {
-        throw new Error(`Could not detect region from campaign name: ${campaignName}`);
-      }
-
-      // Find the campaign folder by name
-      const searchQuery = encodeURIComponent(
-        `name='${campaignName}' and '${regionInfo.folderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
-      );
-      const folderResponse = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${searchQuery}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (folderResponse.ok) {
-        const folderData = await folderResponse.json();
-        if (folderData.files && folderData.files.length > 0) {
-          campaignFolderId = folderData.files[0].id;
-        }
-      }
-    }
-
-    if (campaignFolderId) {
-        console.log("[Background] Campaign folder exists:", campaignFolderId);
-        
-        // Now check if a file with the campaign ID in its name exists
-        const fileSearchQuery = encodeURIComponent(
-          `'${campaignFolderId}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false`
-        );
-        const fileResponse = await fetch(
-          `https://www.googleapis.com/drive/v3/files?q=${fileSearchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc`,
-          {
+        // Try fetching with a fresh request - the download completion might have refreshed auth
+        try {
+          const response = await fetch(download.url, {
+            method: 'GET',
+            credentials: 'include',
             headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
-        );
-        
-        if (fileResponse.ok) {
-          const fileData = await fileResponse.json();
-
-          // Check if any file matches BOTH campaign ID AND today's date
-          // File format: "Product data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}"
-          const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
-          const expectedFileName = `Product data ${today} - ${today} - Campaign ${campaignId}`;
-
-          const existingFile = fileData.files?.find((file: any) => {
-            // Exact file name match ensures both date and campaign ID are correct
-            return file.name === expectedFileName;
+              'Accept': 'text/tab-separated-values, text/plain, */*',
+            }
           });
 
-          if (existingFile) {
-            console.log("[Background] ✅ File already exists in Google Drive:", existingFile.name);
-            console.log("[Background] Skipping upload - marking as success");
+          if (response.ok) {
+            const content = await response.text();
 
-            // Broadcast success status immediately
-            broadcastUploadStatus({
-              type: "UPLOAD_STATUS",
-              status: "success",
-              campaignName,
-              fileName: existingFile.name,
-            });
-
-            return; // Exit early - no need to upload again
+            // Validate TSV content using shared utility
+            const validation = validateTSVContent(content);
+            if (validation.isValid) {
+              console.log("[NaverSA Background] ✅ Successfully read TSV content after download completion");
+              // Store it for when content script requests it
+              downloadUrlToFetch = download.url;
+              // Content will be fetched when requested
+            }
           }
+        } catch (error) {
+          console.log("[NaverSA Background] Could not read file immediately after download:", error);
         }
       }
-
-    console.log("[Background] File does not exist in Google Drive - proceeding with upload");
-  } catch (error) {
-    console.warn("[Background] Error checking file existence, proceeding with upload:", error);
-    // Continue with upload even if check fails
+    });
   }
+});
 
-  return new Promise((resolve, reject) => {
+// Listen for messages from content script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Handle GET_TSV_FILE_CONTENT
+  // Reads the most recently downloaded TSV file directly using fetch() in background script
+  if (message.type === "GET_TSV_FILE_CONTENT") {
+    console.log("[NaverSA Background] Received GET_TSV_FILE_CONTENT request");
+
+    // Find the most recent TSV download
     chrome.downloads.search(
       {
-        orderBy: ["-startTime"],
-        limit: 10, // Check last 10 downloads to handle multiple campaigns
+        orderBy: ["-startTime"], // Most recent first
+        limit: 10, // Check more downloads in case some are still in progress
       },
       async (downloads) => {
         if (chrome.runtime.lastError) {
-          console.error("[Background] Error querying downloads:", chrome.runtime.lastError);
-          reject(new Error(chrome.runtime.lastError.message));
+          console.error("[NaverSA Background] Error searching downloads:", chrome.runtime.lastError);
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
           return;
         }
 
         if (!downloads || downloads.length === 0) {
-          console.warn("[Background] No recent downloads found");
-          reject(new Error("No recent downloads found"));
+          sendResponse({ success: false, error: "No recent downloads found" });
           return;
         }
 
-        // Find the most recent .xlsx file that matches the campaign ID
-        // File format: "(Product|Livestream) data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}( (n))?.xlsx"
-        const xlsxDownload = downloads.find(
-          (d) => {
-            if (!d.filename.endsWith(".xlsx") || d.state !== "complete") {
-              return false;
-            }
-            // Match campaign ID with optional duplicate suffix like " (6)"
-            const campaignPattern = new RegExp(`Campaign ${campaignId}(?:\s*\(\d+\))?`);
-            return campaignPattern.test(d.filename);
-          }
+        console.log("[NaverSA Background] Found", downloads.length, "recent downloads");
+
+        // Find TSV file that's complete
+        const tsvDownload = downloads.find(
+          (d) => d.filename.endsWith(".tsv") && d.state === "complete"
         );
 
-        if (!xlsxDownload) {
-          console.warn("[Background] No completed Excel file found for campaign ID:", campaignId);
-          console.warn("[Background] Available downloads:", downloads.map(d => d.filename));
-          reject(new Error(`No Excel file found for campaign ${campaignId}`));
+        if (!tsvDownload) {
+          // Check if there's a TSV download in progress
+          const inProgress = downloads.find(
+            (d) => d.filename.endsWith(".tsv") && d.state === "in_progress"
+          );
+          if (inProgress) {
+            sendResponse({
+              success: false,
+              error: "TSV file is still downloading. Please wait a moment and try again."
+            });
+            return;
+          }
+          sendResponse({ success: false, error: "No completed TSV file found in recent downloads" });
           return;
         }
 
-        console.log("[Background] Found Excel download for campaign:", xlsxDownload);
+        console.log("[NaverSA Background] Found TSV file:", tsvDownload.filename);
+        console.log("[NaverSA Background] Download URL:", tsvDownload.url);
 
-        // Extract filename from path
-        const fileName = xlsxDownload.filename.split(/[/\\]/).pop() || "report.xlsx";
-
-        // Get the file from the filesystem using FileSystem Access API
+        // Read the file directly using fetch() - this works in background script context
         try {
-          console.log("[Background] Reading downloaded file...");
-
-          // Use chrome.downloads.download to get file URL that we can fetch
-          // The file URL from downloads API can be fetched in background context
-          if (!xlsxDownload.url) {
+          if (!tsvDownload.url) {
             throw new Error("Download URL not available");
           }
 
-          console.log("[Background] Fetching file from:", xlsxDownload.url);
+          console.log("[NaverSA Background] Reading downloaded file content...");
 
           // Fetch the file content
-          const response = await fetch(xlsxDownload.url);
+          const response = await fetch(tsvDownload.url);
           if (!response.ok) {
-            throw new Error(`Failed to fetch downloaded file: ${response.statusText}`);
+            throw new Error(`Failed to fetch file: ${response.statusText}`);
           }
 
-          const fileBlob = await response.blob();
-          console.log("[Background] File fetched, size:", fileBlob.size);
+          // Get file as text
+          const content = await response.text();
+          console.log("[NaverSA Background] File read successfully, size:", content.length, "characters");
 
-          // Directly call the upload logic with the blob
-          console.log("[Background] Starting upload to Google Drive...");
+          // Validate TSV content using shared utility
+          const validation = validateTSVContent(content);
+          if (!validation.isValid) {
+            console.error("[NaverSA Background] ❌ Invalid TSV content:", validation.error);
+            console.error("[NaverSA Background] Content preview:", content.substring(0, 500));
+            throw new Error(validation.error || "Invalid TSV content");
+          }
 
-          // Send "started" status
-          broadcastUploadStatus({
-            type: "UPLOAD_STATUS",
-            status: "started",
-            campaignName,
+          console.log("[NaverSA Background] ✅ Successfully read and validated TSV content");
+          sendResponse({
+            success: true,
+            content: content,
+            filename: tsvDownload.filename
           });
-
-          // Determine upload configuration
-          let uploadConfig: GoogleDriveConfig;
-
-          if (folderId) {
-            // Use provided folder ID directly
-            console.log("[Background] Using provided folder ID:", folderId);
-            uploadConfig = {
-              parentFolderId: folderId,
-              folderId: folderId,
-              fileName: fileName,
-              fileBlob: fileBlob,
-            };
-          } else {
-            // Detect region from campaign name
-            const regionInfo = detectRegionFromCampaign(campaignName);
-            if (!regionInfo) {
-              throw new Error(`Could not detect region from campaign name: ${campaignName}`);
-            }
-            uploadConfig = {
-              parentFolderId: regionInfo.folderId,
-              campaignFolderName: campaignName,
-              fileName: fileName,
-              fileBlob: fileBlob,
-            };
-          }
-
-          const result = await uploadToGoogleDrive(uploadConfig);
-
-          if (!result.success) {
-            throw new Error(result.error || "Upload failed");
-          }
-
-          console.log("[Background] Upload successful:", result);
-
-          // Send "success" status
-          broadcastUploadStatus({
-            type: "UPLOAD_STATUS",
-            status: "success",
-            campaignName,
-            fileName: result.fileName,
-          });
-
-          resolve();
         } catch (error) {
-          console.error("[Background] Error processing download:", error);
-
-          // Send "error" status
-          broadcastUploadStatus({
-            type: "UPLOAD_STATUS",
-            status: "error",
-            campaignName,
-            error: error instanceof Error ? error.message : "Unknown error",
+          console.error("[NaverSA Background] Failed to read download file:", error);
+          sendResponse({
+            success: false,
+            error: `Failed to read downloaded file: ${error instanceof Error ? error.message : 'Unknown error'}`
           });
-
-          reject(error);
         }
       }
     );
-  });
-}
 
-// Listen for messages from content scripts and popup
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "REFETCH_UPLOAD_STATUSES") {
-    (async () => {
-      try {
-        // Load campaigns and current statuses
-        const stored = await chrome.storage.local.get([
-          "gmv_max_campaign_data",
-          "gmv_max_upload_success_status",
-        ]);
+    return true; // Keep message channel open for async response
+  }
 
-        const campaigns: Array<{ name: string; id: string }> = stored.gmv_max_campaign_data || [];
-        const currentStatuses: Record<string, { status: string }> = stored.gmv_max_upload_success_status || {};
-
-        if (campaigns.length === 0) {
-          sendResponse({ success: true });
+  // Legacy handler for backward compatibility
+  if (message.type === "GET_TSV_FILE_URL") {
+    console.log("[NaverSA Background] Received GET_TSV_FILE_URL request (legacy mode - redirecting)");
+    // Call the new handler
+    chrome.runtime.onMessage.hasListeners();
+    // Just redirect to new handler by calling it
+    const handler = chrome.runtime.onMessage;
+    // Actually, just handle it the same way
+    chrome.downloads.search(
+      {
+        orderBy: ["-startTime"],
+        limit: 10,
+      },
+      (downloads) => {
+        if (!downloads || downloads.length === 0) {
+          sendResponse({ success: false, error: "No recent downloads found" });
           return;
         }
-
-        // Auth once
-        const token = await getAuthToken();
-
-        // For each campaign, check if a file exists in its region folder
-        const updatedStatuses: Record<string, { status: string }> = { ...currentStatuses };
-
-        for (const campaign of campaigns) {
-          const regionInfo = detectRegionFromCampaign(campaign.name);
-          if (!regionInfo) {
-            continue;
-          }
-
-          try {
-            // Step 1: Search for the campaign folder inside the region parent folder
-            const folderSearchQuery = encodeURIComponent(
-              `name='${campaign.name}' and '${regionInfo.folderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
-            );
-            const folderResp = await fetch(
-              `https://www.googleapis.com/drive/v3/files?q=${folderSearchQuery}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
-              { headers: { Authorization: `Bearer ${token}` } }
-            );
-
-            if (!folderResp.ok) {
-              // If folder search fails, do not mark as success
-              continue;
-            }
-
-            const folderData = await folderResp.json();
-            if (!Array.isArray(folderData.files) || folderData.files.length === 0) {
-              // No folder found for this campaign - do not mark as success
-              // Remove from statuses if it was previously marked as success
-              if (updatedStatuses[campaign.name]?.status === "success") {
-                delete updatedStatuses[campaign.name];
-              }
-              continue;
-            }
-
-            // Step 2: Check if the campaign folder contains a file with the campaign ID in its name
-            const campaignFolderId = folderData.files[0].id;
-            const fileSearchQuery = encodeURIComponent(
-              `'${campaignFolderId}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false`
-            );
-            const fileResp = await fetch(
-              `https://www.googleapis.com/drive/v3/files?q=${fileSearchQuery}&fields=files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc`,
-              { headers: { Authorization: `Bearer ${token}` } }
-            );
-
-            if (fileResp.ok) {
-              const fileData = await fileResp.json();
-
-              // Check if any file matches BOTH campaign ID AND today's date
-              // File format: "Product data YYYY-MM-DD - YYYY-MM-DD - Campaign {campaignId}"
-              const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
-              const expectedFileName = `Product data ${today} - ${today} - Campaign ${campaign.id}`;
-
-              const hasMatchingFile = Array.isArray(fileData.files) &&
-                fileData.files.some((file: any) => file.name === expectedFileName);
-
-              if (hasMatchingFile) {
-                // Found .xlsx file with exact filename match (date + campaign ID) - mark as success
-                updatedStatuses[campaign.name] = { status: "success" } as any;
-              } else {
-                // Folder exists but no file with exact match - remove success status if previously set
-                if (updatedStatuses[campaign.name]?.status === "success") {
-                  delete updatedStatuses[campaign.name];
-                }
-              }
-            } else {
-              // File search failed - remove success status if previously set
-              if (updatedStatuses[campaign.name]?.status === "success") {
-                delete updatedStatuses[campaign.name];
-              }
-            }
-          } catch (_) {
-            // Ignore per-campaign errors to allow others to proceed
-          }
+        const tsvDownload = downloads.find(
+          (d) => d.filename.endsWith(".tsv") && d.state === "complete"
+        );
+        if (!tsvDownload || !tsvDownload.url) {
+          sendResponse({ success: false, error: "No TSV file found" });
+          return;
         }
-
-        await chrome.storage.local.set({ gmv_max_upload_success_status: updatedStatuses });
-        sendResponse({ success: true });
-      } catch (error) {
-        sendResponse({ success: false, error: (error as Error).message });
+        sendResponse({
+          success: true,
+          url: tsvDownload.url,
+          filename: tsvDownload.filename
+        });
       }
-    })();
+    );
     return true;
   }
-  if (message.type === "CHECK_AND_UPLOAD_DOWNLOAD") {
-    // Handle download check and upload request from content script
-    console.log("[Background] Received CHECK_AND_UPLOAD_DOWNLOAD request");
-    checkAndUploadDownload(message.campaignName, message.campaignId, message.folderId)
-      .then(() => {
-        sendResponse({ success: true });
-      })
-      .catch((error) => {
-        console.error("[Background] Failed to check and upload:", error);
-        sendResponse({ success: false, error: error.message });
-      });
-    return true; // Keep message channel open for async response
-  }
 
-  if (message.type === "UPLOAD_FILE") {
-    // Handle direct file upload request
-    handleFileUpload(message as UploadRequest)
-      .then(() => {
-        sendResponse({ success: true });
-      })
-      .catch((error) => {
-        sendResponse({ success: false, error: error.message });
-      });
-    return true; // Keep message channel open for async response
-  }
-});
+  if (message.type === "PROCESS_TSV_UPLOAD") {
+    console.log("[NaverSA Background] Received PROCESS_TSV_UPLOAD request");
 
-// Listen for storage changes
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === "local" && changes.todos) {
-    updateBadge();
-  }
-});
-
-// Update badge on extension install/startup
-chrome.runtime.onInstalled.addListener(() => {
-  updateBadge();
-  
-  // 🔧 DEVELOPMENT ONLY: Validate Shared Drive configuration
-  // ✅ ENABLED - Verify folder IDs are in Shared Drives
-  // ⚠️ REMEMBER TO COMMENT OUT before production deployment
-  (async () => {
-    try {
-      const token = await getAuthToken();
-      const validation = await validateSharedDriveFolders(token);
-      
-      console.log("========================================");
-      console.log("📁 SHARED DRIVE VALIDATION RESULTS");
-      console.log("========================================");
-      
-      validation.results.forEach(({ region, folderId, accessible, isSharedDrive, folderName, error }) => {
-        const status = (accessible && isSharedDrive) ? "✅" : "❌";
-        console.log(`${status} ${region}`);
-        console.log(`   Folder ID: ${folderId}`);
-        if (folderName) console.log(`   Folder Name: ${folderName}`);
-        console.log(`   Accessible: ${accessible}`);
-        console.log(`   Shared Drive: ${isSharedDrive}`);
-        if (error) console.log(`   Error: ${error}`);
-        console.log("");
-      });
-      
-      console.log("========================================");
-      console.log(`Overall Status: ${validation.valid ? "✅ ALL VALID" : "❌ SOME FOLDERS ARE INVALID"}`);
-      console.log("========================================");
-      
-      if (!validation.valid) {
-        console.error("");
-        console.error("========================================");
-        console.error("⚠️ ACTION REQUIRED: Fix Folder Access");
-        console.error("========================================");
-        console.error("");
-        console.error("🔧 SOLUTION:");
-        console.error("1. Go to Google Drive → Shared drives");
-        console.error("2. Find 'GMV_Max_Automation_TEST' Shared Drive");
-        console.error("3. Right-click the Shared Drive → 'Manage members'");
-        console.error("4. Click 'Add members'");
-        console.error("5. Add this service account email:");
-        console.error("   gmv-max-automation-service-acc@gmv-max-campaign-navigator.iam.gserviceaccount.com");
-        console.error("6. Set role to 'Content manager' or 'Manager'");
-        console.error("7. Click 'Send'");
-        console.error("");
-        console.error("========================================");
-      }
-    } catch (error) {
-      console.error("Failed to validate folders:", error);
+    // Check if we have TSV content
+    if (!message.tsvContent) {
+      console.error("[NaverSA Background] No TSV content provided");
+      sendResponse({ success: false, error: "No TSV content provided" });
+      return true;
     }
-  })();
+
+    processTSVUpload(message.tsvContent, message.dateRange)
+      .then(() => {
+        sendResponse({ success: true });
+      })
+      .catch((error) => {
+        console.error("[NaverSA Background] Processing failed:", error);
+        sendResponse({ success: false, error: error.message });
+      });
+
+    return true; // Keep message channel open for async response
+  }
+});
+
+// Extension startup
+chrome.runtime.onInstalled.addListener(() => {
+  console.log("[NaverSA Background] Extension installed/updated");
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  updateBadge();
+  console.log("[NaverSA Background] Extension started");
 });
 
-// Initial badge update
-updateBadge();
+console.log("[NaverSA Background] Background script loaded");

@@ -1,5 +1,5 @@
 {
-  "name": "gmv-max-automation",
+  "name": "naversa-automation",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -8,7 +8,8 @@
     "start": "next start",
     "build:extension": "webpack --config webpack.config.js --mode production",
     "dev:extension": "webpack --config webpack.config.js --mode development --watch",
-    "package": "node scripts/package-extension.js"
+    "package": "node scripts/package-extension.js",
+    "fetch-latest": "npx ts-node --esm fetch-latest-download.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
