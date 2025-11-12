@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { POPUP_WIDTH } from "./constants/ui";
 import { STORAGE_KEYS } from "./constants/storage";
-import { NaverSAList } from "./components/NaverSAList";
+import { YTStudioList } from "./components/YTStudioList";
 import { SettingsView } from "./components/SettingsView";
 import { NAVER_SEARCHAD_REPORTS_DOWNLOAD_URL } from "./constants/urls";
 
@@ -145,19 +145,23 @@ export default function URLReplacerPopup() {
   // Auto-save date range when it changes (debounced)
   React.useEffect(() => {
     const timer = setTimeout(() => {
-      const dateRange = {
-        startYear,
-        startMonth,
-        startDay,
-        endYear,
-        endMonth,
-        endDay,
-      };
+      // Only save if at least start date is configured (not all zeros)
+      // This prevents saving invalid date range on initial mount
+      if (startYear > 0 || startMonth > 0 || startDay > 0 || endYear > 0 || endMonth > 0 || endDay > 0) {
+        const dateRange = {
+          startYear,
+          startMonth,
+          startDay,
+          endYear,
+          endMonth,
+          endDay,
+        };
 
-      localStorage.setItem(STORAGE_KEYS.DATE_RANGE, JSON.stringify(dateRange));
+        localStorage.setItem(STORAGE_KEYS.DATE_RANGE, JSON.stringify(dateRange));
 
-      if (typeof chrome !== "undefined" && chrome.storage) {
-        chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+        if (typeof chrome !== "undefined" && chrome.storage) {
+          chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+        }
       }
     }, 500);
 
@@ -257,48 +261,108 @@ export default function URLReplacerPopup() {
 
   const setToday = () => {
     const now = new Date();
-    setStartYear(now.getFullYear());
-    setStartMonth(now.getMonth() + 1);
-    setStartDay(now.getDate());
-    setEndYear(now.getFullYear());
-    setEndMonth(now.getMonth() + 1);
-    setEndDay(now.getDate());
+    const dateRange = {
+      startYear: now.getFullYear(),
+      startMonth: now.getMonth() + 1,
+      startDay: now.getDate(),
+      endYear: now.getFullYear(),
+      endMonth: now.getMonth() + 1,
+      endDay: now.getDate(),
+    };
+
+    setStartYear(dateRange.startYear);
+    setStartMonth(dateRange.startMonth);
+    setStartDay(dateRange.startDay);
+    setEndYear(dateRange.endYear);
+    setEndMonth(dateRange.endMonth);
+    setEndDay(dateRange.endDay);
+
+    // Immediately save to storage
+    if (typeof chrome !== "undefined" && chrome.storage) {
+      chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+    }
+
     toast.success("Date set to today");
   };
 
   const setYesterday = () => {
     const now = new Date();
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    setStartYear(yesterday.getFullYear());
-    setStartMonth(yesterday.getMonth() + 1);
-    setStartDay(yesterday.getDate());
-    setEndYear(yesterday.getFullYear());
-    setEndMonth(yesterday.getMonth() + 1);
-    setEndDay(yesterday.getDate());
+    const dateRange = {
+      startYear: yesterday.getFullYear(),
+      startMonth: yesterday.getMonth() + 1,
+      startDay: yesterday.getDate(),
+      endYear: yesterday.getFullYear(),
+      endMonth: yesterday.getMonth() + 1,
+      endDay: yesterday.getDate(),
+    };
+
+    setStartYear(dateRange.startYear);
+    setStartMonth(dateRange.startMonth);
+    setStartDay(dateRange.startDay);
+    setEndYear(dateRange.endYear);
+    setEndMonth(dateRange.endMonth);
+    setEndDay(dateRange.endDay);
+
+    // Immediately save to storage
+    if (typeof chrome !== "undefined" && chrome.storage) {
+      chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+    }
+
     toast.success("Date set to yesterday");
   };
 
   const setLast7Days = () => {
     const now = new Date();
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    setStartYear(sevenDaysAgo.getFullYear());
-    setStartMonth(sevenDaysAgo.getMonth() + 1);
-    setStartDay(sevenDaysAgo.getDate());
-    setEndYear(now.getFullYear());
-    setEndMonth(now.getMonth() + 1);
-    setEndDay(now.getDate());
+    const dateRange = {
+      startYear: sevenDaysAgo.getFullYear(),
+      startMonth: sevenDaysAgo.getMonth() + 1,
+      startDay: sevenDaysAgo.getDate(),
+      endYear: now.getFullYear(),
+      endMonth: now.getMonth() + 1,
+      endDay: now.getDate(),
+    };
+
+    setStartYear(dateRange.startYear);
+    setStartMonth(dateRange.startMonth);
+    setStartDay(dateRange.startDay);
+    setEndYear(dateRange.endYear);
+    setEndMonth(dateRange.endMonth);
+    setEndDay(dateRange.endDay);
+
+    // Immediately save to storage
+    if (typeof chrome !== "undefined" && chrome.storage) {
+      chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+    }
+
     toast.success("Date set to last 7 days");
   };
 
   const setLast30Days = () => {
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    setStartYear(thirtyDaysAgo.getFullYear());
-    setStartMonth(thirtyDaysAgo.getMonth() + 1);
-    setStartDay(thirtyDaysAgo.getDate());
-    setEndYear(now.getFullYear());
-    setEndMonth(now.getMonth() + 1);
-    setEndDay(now.getDate());
+    const dateRange = {
+      startYear: thirtyDaysAgo.getFullYear(),
+      startMonth: thirtyDaysAgo.getMonth() + 1,
+      startDay: thirtyDaysAgo.getDate(),
+      endYear: now.getFullYear(),
+      endMonth: now.getMonth() + 1,
+      endDay: now.getDate(),
+    };
+
+    setStartYear(dateRange.startYear);
+    setStartMonth(dateRange.startMonth);
+    setStartDay(dateRange.startDay);
+    setEndYear(dateRange.endYear);
+    setEndMonth(dateRange.endMonth);
+    setEndDay(dateRange.endDay);
+
+    // Immediately save to storage
+    if (typeof chrome !== "undefined" && chrome.storage) {
+      chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+    }
+
     toast.success("Date set to last 30 days");
   };
 
@@ -407,7 +471,7 @@ export default function URLReplacerPopup() {
             onToggleButtons={handleToggleButtons}
           />
         ) : (
-          <NaverSAList
+          <YTStudioList
             version={version}
             isLoading={isLoading}
             isRefetching={isRefetching}

@@ -8,7 +8,7 @@ import type { Campaign, UploadStatus } from "../types/campaign";
 import { getRegionBadgeColor, getTypeBadgeColor, getBadgeStyle } from "../utils/badgeColors";
 import { ExternalLinkIcon } from "@radix-ui/react-icons";
 
-interface NaverSAItemProps {
+interface YTStudioItemProps {
   campaign: Campaign;
   index: number;
   currentIndex: number;
@@ -19,7 +19,7 @@ interface NaverSAItemProps {
   onNavigateToGoogleDrive: (index: number, event: React.MouseEvent) => void;
 }
 
-export function NaverSAItem({
+export function YTStudioItem({
   campaign,
   index,
   currentIndex,
@@ -28,7 +28,7 @@ export function NaverSAItem({
   isLoading,
   onTriggerWorkflow,
   onNavigateToGoogleDrive,
-}: NaverSAItemProps) {
+}: YTStudioItemProps) {
   return (
     <div
       className={`w-full border-2 p-3 shadow-brutal-button rounded-none ${
@@ -115,3 +115,4 @@ export function NaverSAItem({
     </div>
   );
 }
+

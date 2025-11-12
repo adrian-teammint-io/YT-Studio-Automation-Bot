@@ -1,6 +1,6 @@
 /**
- * Content script for Naver SearchAd report automation
- * Runs on Naver SearchAd report download page and automates:
+ * Content script for YT Studio report automation
+ * Runs on YT Studio report download page and automates:
  * 1. Click "대용량 보고서 다운로드" tab
  * 2. Select report type dropdown
  * 3. Configure date range
@@ -27,7 +27,7 @@ let isUploadInProgress = false; // Flag to prevent duplicate uploads
  * Show toast notification at bottom of page
  */
 function showToast(message: string, type: "info" | "success" | "error" | "loading" = "info", duration: number = 3000): void {
-  const toast = document.getElementById("naversa-toast");
+  const toast = document.getElementById("ytstudio-toast");
   if (!toast) return;
 
   const icons = {
@@ -38,7 +38,7 @@ function showToast(message: string, type: "info" | "success" | "error" | "loadin
   };
 
   toast.textContent = `${icons[type]} ${message}`;
-  toast.className = `naversa-toast naversa-toast-${type}`;
+  toast.className = `ytstudio-toast ytstudio-toast-${type}`;
   toast.style.display = "block";
 
   // Auto-hide after specified duration for success/error
@@ -68,11 +68,11 @@ function showReloadPrompt(): void {
   showToast("확장 프로그램이 업데이트되었습니다. 페이지를 새로고침하세요.", "error");
 
   // Create a persistent reload button
-  const existingButton = document.getElementById("naversa-reload-btn");
+  const existingButton = document.getElementById("ytstudio-reload-btn");
   if (existingButton) return;
 
   const reloadBtn = document.createElement("button");
-  reloadBtn.id = "naversa-reload-btn";
+  reloadBtn.id = "ytstudio-reload-btn";
   reloadBtn.innerHTML = "🔄 새로고침";
   reloadBtn.style.cssText = `
     position: fixed;
@@ -103,7 +103,7 @@ function showReloadPrompt(): void {
  * Step 1: Click "대용량 보고서 다운로드" tab
  */
 async function clickReportTab(): Promise<boolean> {
-  console.log("[NaverSA] Step 1: Clicking '대용량 보고서 다운로드' tab...");
+  console.log("[YTStudio] Step 1: Clicking '대용량 보고서 다운로드' tab...");
   showToast("'대용량 보고서 다운로드' 탭 클릭 중...", "loading");
 
   // Strategy: Find tab/button with text "대용량 보고서 다운로드"
@@ -111,7 +111,7 @@ async function clickReportTab(): Promise<boolean> {
 
   for (const tab of tabs) {
     if (tab.textContent?.includes("대용량 보고서 다운로드")) {
-      console.log("[NaverSA] Found report tab, clicking...");
+      console.log("[YTStudio] Found report tab, clicking...");
       (tab as HTMLElement).click();
       showToast("탭 클릭 완료", "success");
       await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for tab content to load
@@ -119,7 +119,7 @@ async function clickReportTab(): Promise<boolean> {
     }
   }
 
-  console.warn("[NaverSA] Report tab not found");
+  console.warn("[YTStudio] Report tab not found");
   return false;
 }
 
@@ -127,23 +127,23 @@ async function clickReportTab(): Promise<boolean> {
  * Step 2: Select "쇼핑검색 검색어 전환 상세 보고서" from dropdown
  */
 async function selectReportType(): Promise<boolean> {
-  console.log("[NaverSA] Step 2: Selecting report type...");
+  console.log("[YTStudio] Step 2: Selecting report type...");
   showToast("보고서 유형 선택 중...", "loading");
 
   // === DIAGNOSTIC LOGGING: Layer 1 - Find title areas ===
   const titleAreas = document.querySelectorAll('.title-area');
-  console.log("[NaverSA] DEBUG: Found", titleAreas.length, "elements with class '.title-area'");
+  console.log("[YTStudio] DEBUG: Found", titleAreas.length, "elements with class '.title-area'");
 
   if (titleAreas.length === 0) {
-    console.error("[NaverSA] DIAGNOSTIC: No .title-area elements found on page");
-    console.error("[NaverSA] DIAGNOSTIC: Available classes on page:", Array.from(new Set(Array.from(document.querySelectorAll('[class]')).map(el => el.className))).slice(0, 20));
+    console.error("[YTStudio] DIAGNOSTIC: No .title-area elements found on page");
+    console.error("[YTStudio] DIAGNOSTIC: Available classes on page:", Array.from(new Set(Array.from(document.querySelectorAll('[class]')).map(el => el.className))).slice(0, 20));
     return false;
   }
 
   // === DIAGNOSTIC LOGGING: Layer 2 - Check text content ===
-  console.log("[NaverSA] DEBUG: Checking title areas for text '다운로드 항목 선택'");
+  console.log("[YTStudio] DEBUG: Checking title areas for text '다운로드 항목 선택'");
   titleAreas.forEach((area, idx) => {
-    console.log(`[NaverSA] DEBUG: titleArea[${idx}] text:`, area.textContent?.trim().substring(0, 50));
+    console.log(`[YTStudio] DEBUG: titleArea[${idx}] text:`, area.textContent?.trim().substring(0, 50));
   });
 
   let dropdownButton: HTMLElement | null = null;
@@ -152,13 +152,13 @@ async function selectReportType(): Promise<boolean> {
   for (const titleArea of titleAreas) {
     if (titleArea.textContent?.includes("다운로드 항목 선택")) {
       foundTitleArea = true;
-      console.log("[NaverSA] DEBUG: ✓ Found title area with matching text");
+      console.log("[YTStudio] DEBUG: ✓ Found title area with matching text");
 
       // === FIX: Expand search scope - try multiple strategies ===
 
       // Strategy 1: Search in parent container (go up more levels)
       const parentContainer = titleArea.closest('div')?.parentElement;
-      console.log("[NaverSA] DEBUG: Trying parent container...");
+      console.log("[YTStudio] DEBUG: Trying parent container...");
 
       if (parentContainer) {
         // Try multiple selector patterns
@@ -177,14 +177,14 @@ async function selectReportType(): Promise<boolean> {
           const buttons = parentContainer.querySelectorAll('button');
           if (buttons.length > 0) {
             dropdownButton = buttons[0] as HTMLElement;
-            console.log("[NaverSA] DEBUG: Found button by fallback strategy");
+            console.log("[YTStudio] DEBUG: Found button by fallback strategy");
           }
         }
       }
 
       // Strategy 2: Search in next sibling
       if (!dropdownButton) {
-        console.log("[NaverSA] DEBUG: Trying sibling elements...");
+        console.log("[YTStudio] DEBUG: Trying sibling elements...");
         let sibling = titleArea.nextElementSibling;
         while (sibling && !dropdownButton) {
           dropdownButton = sibling.querySelector('.dropdown-toggle, button, select') as HTMLElement;
@@ -195,10 +195,10 @@ async function selectReportType(): Promise<boolean> {
         }
       }
 
-      console.log("[NaverSA] DEBUG: Final dropdown button found:", dropdownButton !== null);
+      console.log("[YTStudio] DEBUG: Final dropdown button found:", dropdownButton !== null);
       if (dropdownButton) {
-        console.log("[NaverSA] DEBUG: Dropdown element tag:", dropdownButton.tagName);
-        console.log("[NaverSA] DEBUG: Dropdown element classes:", dropdownButton.className);
+        console.log("[YTStudio] DEBUG: Dropdown element tag:", dropdownButton.tagName);
+        console.log("[YTStudio] DEBUG: Dropdown element classes:", dropdownButton.className);
       }
 
       break;
@@ -206,17 +206,17 @@ async function selectReportType(): Promise<boolean> {
   }
 
   if (!foundTitleArea) {
-    console.error("[NaverSA] DIAGNOSTIC: No title area contains '다운로드 항목 선택'");
-    console.error("[NaverSA] DIAGNOSTIC: All title area texts:", Array.from(titleAreas).map(a => a.textContent?.trim()));
+    console.error("[YTStudio] DIAGNOSTIC: No title area contains '다운로드 항목 선택'");
+    console.error("[YTStudio] DIAGNOSTIC: All title area texts:", Array.from(titleAreas).map(a => a.textContent?.trim()));
   }
 
   if (!dropdownButton) {
-    console.warn("[NaverSA] Dropdown button not found");
+    console.warn("[YTStudio] Dropdown button not found");
     return false;
   }
 
   // Click to open dropdown
-  console.log("[NaverSA] Opening dropdown...");
+  console.log("[YTStudio] Opening dropdown...");
   dropdownButton.click();
   await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -225,7 +225,7 @@ async function selectReportType(): Promise<boolean> {
 
   for (const item of dropdownItems) {
     if (item.textContent?.includes("쇼핑검색 검색어 전환 상세 보고서")) {
-      console.log("[NaverSA] Found target option, selecting...");
+      console.log("[YTStudio] Found target option, selecting...");
       (item as HTMLElement).click();
       showToast("보고서 유형 선택 완료", "success");
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -233,7 +233,7 @@ async function selectReportType(): Promise<boolean> {
     }
   }
 
-  console.warn("[NaverSA] Report type option not found");
+  console.warn("[YTStudio] Report type option not found");
   return false;
 }
 
@@ -241,12 +241,12 @@ async function selectReportType(): Promise<boolean> {
  * Step 3: Set date in calendar input
  */
 async function setDate(dateString: string): Promise<boolean> {
-  console.log("[NaverSA] Step 3: Setting date to", dateString);
+  console.log("[YTStudio] Step 3: Setting date to", dateString);
   showToast(`날짜 설정 중: ${dateString}`, "loading");
 
   // Find the calendar input by looking for title-area "조회 일자 선택"
   const titleAreas = document.querySelectorAll('.title-area');
-  console.log("[NaverSA] DEBUG: Found", titleAreas.length, "elements with class '.title-area'");
+  console.log("[YTStudio] DEBUG: Found", titleAreas.length, "elements with class '.title-area'");
 
   let calendarInput: HTMLInputElement | null = null;
   let titleArea: Element | null = null;
@@ -254,19 +254,19 @@ async function setDate(dateString: string): Promise<boolean> {
   for (const area of titleAreas) {
     if (area.textContent?.includes("조회 일자 선택")) {
       titleArea = area;
-      console.log("[NaverSA] DEBUG: Found matching title-area:", area.textContent);
+      console.log("[YTStudio] DEBUG: Found matching title-area:", area.textContent);
       break;
     }
   }
 
   if (!titleArea) {
-    console.warn("[NaverSA] Title area '조회 일자 선택' not found");
+    console.warn("[YTStudio] Title area '조회 일자 선택' not found");
     return false;
   }
 
   // Strategy 1: Search in parent container with multiple selectors
   const parentContainer = titleArea.closest('div')?.parentElement;
-  console.log("[NaverSA] DEBUG: Parent container HTML:", parentContainer?.innerHTML?.substring(0, 200));
+  console.log("[YTStudio] DEBUG: Parent container HTML:", parentContainer?.innerHTML?.substring(0, 200));
 
   if (parentContainer) {
     // Try specific selector first
@@ -285,11 +285,11 @@ async function setDate(dateString: string): Promise<boolean> {
     if (!calendarInput) {
       // Try any input that might be a date input
       const inputs = parentContainer.querySelectorAll('input');
-      console.log("[NaverSA] DEBUG: Found", inputs.length, "input elements in parent container");
+      console.log("[YTStudio] DEBUG: Found", inputs.length, "input elements in parent container");
       for (const input of inputs) {
         if (input.type === 'text' || input.type === 'date') {
           calendarInput = input as HTMLInputElement;
-          console.log("[NaverSA] DEBUG: Using fallback input:", input.name, input.className);
+          console.log("[YTStudio] DEBUG: Using fallback input:", input.name, input.className);
           break;
         }
       }
@@ -298,7 +298,7 @@ async function setDate(dateString: string): Promise<boolean> {
 
   // Strategy 2: Search in siblings if not found in parent
   if (!calendarInput) {
-    console.log("[NaverSA] DEBUG: Searching in siblings...");
+    console.log("[YTStudio] DEBUG: Searching in siblings...");
     let sibling = titleArea.nextElementSibling;
     while (sibling && !calendarInput) {
       calendarInput = sibling.querySelector('input[name="calendar-input-value"], input[type="date"], input[class*="calendar"], input[class*="date"]') as HTMLInputElement;
@@ -312,12 +312,12 @@ async function setDate(dateString: string): Promise<boolean> {
   }
 
   if (!calendarInput) {
-    console.warn("[NaverSA] Calendar input not found");
+    console.warn("[YTStudio] Calendar input not found");
     return false;
   }
 
   // Set the value
-  console.log("[NaverSA] Setting input value...");
+  console.log("[YTStudio] Setting input value...");
   calendarInput.value = dateString;
 
   // Trigger change event
@@ -336,7 +336,7 @@ async function setDate(dateString: string): Promise<boolean> {
  * Step 4: Click "생성요청" button to create report
  */
 async function clickCreateButton(): Promise<boolean> {
-  console.log("[NaverSA] Step 4: Clicking '생성요청' button...");
+  console.log("[YTStudio] Step 4: Clicking '생성요청' button...");
   showToast("보고서 생성 요청 중...", "loading");
 
   // Find button with text "생성요청"
@@ -345,7 +345,7 @@ async function clickCreateButton(): Promise<boolean> {
   for (const button of buttons) {
     const span = button.querySelector('span');
     if (span?.textContent?.includes("생성요청")) {
-      console.log("[NaverSA] Found create button, clicking...");
+      console.log("[YTStudio] Found create button, clicking...");
       button.click();
       showToast("생성 요청 완료", "success");
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -353,7 +353,7 @@ async function clickCreateButton(): Promise<boolean> {
     }
   }
 
-  console.warn("[NaverSA] Create button not found");
+  console.warn("[YTStudio] Create button not found");
   return false;
 }
 
@@ -361,16 +361,16 @@ async function clickCreateButton(): Promise<boolean> {
  * Step 5: Refresh page after delay
  */
 async function refreshPage(): Promise<void> {
-  console.log(`[NaverSA] Step 5: Waiting ${REFRESH_DELAY}ms before refresh...`);
+  console.log(`[YTStudio] Step 5: Waiting ${REFRESH_DELAY}ms before refresh...`);
   showToast(`${REFRESH_DELAY/1000}초 후 새로고침...`, "loading");
 
   await new Promise(resolve => setTimeout(resolve, REFRESH_DELAY));
 
   // Mark that we're in polling phase BEFORE reload
-  console.log("[NaverSA] Setting polling flag before page refresh...");
-  sessionStorage.setItem("naversa_polling", "true");
+  console.log("[YTStudio] Setting polling flag before page refresh...");
+  sessionStorage.setItem("ytstudio_polling", "true");
 
-  console.log("[NaverSA] Refreshing page...");
+  console.log("[YTStudio] Refreshing page...");
   showToast("페이지 새로고침 중...", "loading");
   window.location.reload();
 }
@@ -380,45 +380,45 @@ async function refreshPage(): Promise<void> {
  * Check first row, first cell for download link (not "-")
  */
 async function pollForDownloadLink(): Promise<string | null> {
-  console.log("[NaverSA] Step 6: Polling for download link...");
+  console.log("[YTStudio] Step 6: Polling for download link...");
   showToast("다운로드 링크 확인 중...", "loading");
 
   pollAttempts++;
-  console.log(`[NaverSA] Poll attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS}`);
+  console.log(`[YTStudio] Poll attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS}`);
 
   // Find the table (there's only one on the page)
   const table = document.querySelector('table');
   if (!table) {
-    console.warn("[NaverSA] Table not found");
+    console.warn("[YTStudio] Table not found");
     return null;
   }
 
   // Get first row (excluding header)
   const tbody = table.querySelector('tbody');
   if (!tbody) {
-    console.warn("[NaverSA] Table body not found");
+    console.warn("[YTStudio] Table body not found");
     return null;
   }
 
   const firstRow = tbody.querySelector('tr');
   if (!firstRow) {
-    console.warn("[NaverSA] No rows in table");
+    console.warn("[YTStudio] No rows in table");
     return null;
   }
 
   // Get first cell with data-value attribute
   const firstCell = firstRow.querySelector('td[data-value]') as HTMLTableCellElement;
   if (!firstCell) {
-    console.warn("[NaverSA] First cell not found");
+    console.warn("[YTStudio] First cell not found");
     return null;
   }
 
   const dataValue = firstCell.getAttribute('data-value');
-  console.log("[NaverSA] First cell data-value:", dataValue);
+  console.log("[YTStudio] First cell data-value:", dataValue);
 
   // Check if it's not "-" (which means report is ready)
   if (dataValue && dataValue !== "" && dataValue !== "-") {
-    console.log("[NaverSA] ✅ Download link found!");
+    console.log("[YTStudio] ✅ Download link found!");
     showToast("다운로드 링크 발견!", "success");
 
     // Extract download URL - data-value might be a path or just an ID
@@ -429,7 +429,7 @@ async function pollForDownloadLink(): Promise<string | null> {
     } else if (/^\d+$/.test(dataValue)) {
       // Just an ID (numeric) - construct the download URL
       fullUrl = `https://manage.searchad.naver.com/report-download/${dataValue}`;
-      console.log("[NaverSA] Constructed download URL from ID:", fullUrl);
+      console.log("[YTStudio] Constructed download URL from ID:", fullUrl);
     } else if (dataValue.startsWith("http")) {
       // Already a full URL
       fullUrl = dataValue;
@@ -441,15 +441,15 @@ async function pollForDownloadLink(): Promise<string | null> {
     // Store the original URL in sessionStorage before any download happens
     // This is critical because Chrome converts it to a blob URL after clicking
     if (!fullUrl.startsWith('blob:')) {
-      sessionStorage.setItem('naversa_original_download_url', fullUrl);
-      console.log("[NaverSA] Stored original download URL from poll:", fullUrl);
+      sessionStorage.setItem('ytstudio_original_download_url', fullUrl);
+      console.log("[YTStudio] Stored original download URL from poll:", fullUrl);
     }
 
     return fullUrl;
   }
 
   // Not ready yet
-  console.log("[NaverSA] Report not ready yet (value is '-' or empty)");
+  console.log("[YTStudio] Report not ready yet (value is '-' or empty)");
 
   if (pollAttempts < MAX_POLL_ATTEMPTS) {
     showToast(`보고서 생성 대기 중... (${pollAttempts}/${MAX_POLL_ATTEMPTS})`, "loading");
@@ -457,7 +457,7 @@ async function pollForDownloadLink(): Promise<string | null> {
     return await pollForDownloadLink();
   }
 
-  console.error("[NaverSA] Max poll attempts reached");
+  console.error("[YTStudio] Max poll attempts reached");
   showToast("보고서 생성 시간 초과", "error");
   return null;
 }
@@ -466,7 +466,7 @@ async function pollForDownloadLink(): Promise<string | null> {
  * Step 7: Click download link to trigger browser download
  */
 async function downloadTSV(url: string): Promise<boolean> {
-  console.log("[NaverSA] Step 7: Clicking download link...");
+  console.log("[YTStudio] Step 7: Clicking download link...");
   showToast("다운로드 시작 중...", "loading");
 
   try {
@@ -476,7 +476,7 @@ async function downloadTSV(url: string): Promise<boolean> {
     const firstRow = tbody?.querySelector('tr');
 
     if (!firstRow) {
-      console.warn("[NaverSA] First row not found in table");
+      console.warn("[YTStudio] First row not found in table");
       return false;
     }
 
@@ -506,19 +506,19 @@ async function downloadTSV(url: string): Promise<boolean> {
     }
 
     if (downloadLink) {
-      console.log("[NaverSA] Clicking download link...");
+      console.log("[YTStudio] Clicking download link...");
       downloadLink.click();
       showToast("다운로드 시작됨", "success");
 
       // Wait a moment for download to start
-      console.log("[NaverSA] Waiting for download to start...");
+      console.log("[YTStudio] Waiting for download to start...");
       await new Promise(resolve => setTimeout(resolve, 2000));
 
       // Get the downloaded file info from background script
       // Background script will poll for completion (up to 15 seconds)
       showToast("다운로드 파일 확인 중... (최대 15초)", "loading");
-      console.log("[NaverSA] 🔍 Searching for latest downloaded TSV file...");
-      console.log("[NaverSA] Background script will poll for download completion...");
+      console.log("[YTStudio] 🔍 Searching for latest downloaded TSV file...");
+      console.log("[YTStudio] Background script will poll for download completion...");
 
       try {
         const response = await chrome.runtime.sendMessage({
@@ -526,7 +526,7 @@ async function downloadTSV(url: string): Promise<boolean> {
         });
 
         if (!response) {
-          console.warn("[NaverSA] ⚠️  No response from background script");
+          console.warn("[YTStudio] ⚠️  No response from background script");
           showToast("백그라운드 스크립트 응답 없음", "error");
           return false;
         }
@@ -536,14 +536,14 @@ async function downloadTSV(url: string): Promise<boolean> {
           const contentLength = response.content?.length || 0;
           const rows = response.content?.split('\n').filter((l: string) => l.trim()).length || 0;
 
-          console.log("[NaverSA] ========================================");
-          console.log("[NaverSA] 🎯 FOUND DOWNLOADED FILE:");
-          console.log(`[NaverSA]    📄 Filename: ${filename}`);
-          console.log(`[NaverSA]    📊 Size: ${contentLength} characters`);
-          console.log(`[NaverSA]    📏 Rows: ${rows} rows`);
-          console.log("[NaverSA] ========================================");
-          console.log(`[NaverSA] ✅ Successfully retrieved latest download`);
-          console.log("[NaverSA] ========================================");
+          console.log("[YTStudio] ========================================");
+          console.log("[YTStudio] 🎯 FOUND DOWNLOADED FILE:");
+          console.log(`[YTStudio]    📄 Filename: ${filename}`);
+          console.log(`[YTStudio]    📊 Size: ${contentLength} characters`);
+          console.log(`[YTStudio]    📏 Rows: ${rows} rows`);
+          console.log("[YTStudio] ========================================");
+          console.log(`[YTStudio] ✅ Successfully retrieved latest download`);
+          console.log("[YTStudio] ========================================");
 
           // Show toast for 5 seconds with file details
           showToast(`✅ 파일 발견: ${filename} (${rows}행, ${contentLength}자)`, "success", 5000);
@@ -553,16 +553,16 @@ async function downloadTSV(url: string): Promise<boolean> {
             currentStep = "uploading";
             await uploadToGoogleSheets(response.content);
           } else if (isUploadInProgress) {
-            console.log("[NaverSA] ⚠️  Upload already in progress, skipping duplicate upload");
+            console.log("[YTStudio] ⚠️  Upload already in progress, skipping duplicate upload");
             showToast("업로드가 이미 진행 중입니다", "info", 3000);
           }
         } else {
           const errorMsg = response.error || "Unknown error";
-          console.warn("[NaverSA] ⚠️  Could not retrieve file info:", errorMsg);
+          console.warn("[YTStudio] ⚠️  Could not retrieve file info:", errorMsg);
           showToast(`파일 확인 실패: ${errorMsg}`, "error", 5000);
         }
       } catch (error) {
-        console.error("[NaverSA] ❌ Failed to get file info:", error);
+        console.error("[YTStudio] ❌ Failed to get file info:", error);
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
         showToast(`파일 정보 조회 오류: ${errorMessage}`, "error", 5000);
       }
@@ -570,10 +570,10 @@ async function downloadTSV(url: string): Promise<boolean> {
       return true;
     }
 
-    console.warn("[NaverSA] Download link not found");
+    console.warn("[YTStudio] Download link not found");
     return false;
   } catch (error) {
-    console.error("[NaverSA] Download failed:", error);
+    console.error("[YTStudio] Download failed:", error);
     showToast("다운로드 실패", "error");
     return false;
   }
@@ -585,13 +585,13 @@ async function downloadTSV(url: string): Promise<boolean> {
 async function uploadToGoogleSheets(tsvContent: string): Promise<boolean> {
   // Prevent duplicate uploads
   if (isUploadInProgress) {
-    console.log("[NaverSA] ⚠️  Upload already in progress, skipping duplicate upload");
+    console.log("[YTStudio] ⚠️  Upload already in progress, skipping duplicate upload");
     showToast("업로드가 이미 진행 중입니다", "info", 3000);
     return false;
   }
 
   isUploadInProgress = true;
-  console.log("[NaverSA] Step 8: Uploading to Google Sheets...");
+  console.log("[YTStudio] Step 8: Uploading to Google Sheets...");
   showToast("Google Sheets 업로드 중...", "loading");
 
   try {
@@ -601,7 +601,7 @@ async function uploadToGoogleSheets(tsvContent: string): Promise<boolean> {
     });
 
     if (!response) {
-      console.warn("[NaverSA] ⚠️  No response from background script");
+      console.warn("[YTStudio] ⚠️  No response from background script");
       showToast("업로드 응답 없음", "error");
       return false;
     }
@@ -610,11 +610,11 @@ async function uploadToGoogleSheets(tsvContent: string): Promise<boolean> {
       const updatedRows = response.updatedRows || 0;
       const updatedRange = response.updatedRange || "N/A";
 
-      console.log("[NaverSA] ========================================");
-      console.log("[NaverSA] ✅ UPLOAD SUCCESSFUL!");
-      console.log(`[NaverSA]    📊 Rows added: ${updatedRows}`);
-      console.log(`[NaverSA]    📍 Range: ${updatedRange}`);
-      console.log("[NaverSA] ========================================");
+      console.log("[YTStudio] ========================================");
+      console.log("[YTStudio] ✅ UPLOAD SUCCESSFUL!");
+      console.log(`[YTStudio]    📊 Rows added: ${updatedRows}`);
+      console.log(`[YTStudio]    📍 Range: ${updatedRange}`);
+      console.log("[YTStudio] ========================================");
 
       // Parse the range to extract row numbers for user guidance
       const rangeMatch = updatedRange.match(/(\d+):(\w+)(\d+)/);
@@ -622,7 +622,7 @@ async function uploadToGoogleSheets(tsvContent: string): Promise<boolean> {
         const startRow = rangeMatch[1];
         const endRow = rangeMatch[3];
         showToast(`✅ 업로드 완료: ${updatedRows}행 추가됨 (행 ${startRow}-${endRow})`, "success", 5000);
-        console.log(`[NaverSA] 📌 IMPORTANT: Scroll down to row ${startRow} in your Google Sheet to see the uploaded data!`);
+        console.log(`[YTStudio] 📌 IMPORTANT: Scroll down to row ${startRow} in your Google Sheet to see the uploaded data!`);
       } else {
         showToast(`✅ 업로드 완료: ${updatedRows}행 추가됨`, "success", 5000);
       }
@@ -631,13 +631,13 @@ async function uploadToGoogleSheets(tsvContent: string): Promise<boolean> {
       return true;
     } else {
       const errorMsg = response.error || "Unknown error";
-      console.error("[NaverSA] ❌ Upload failed:", errorMsg);
+      console.error("[YTStudio] ❌ Upload failed:", errorMsg);
       showToast(`업로드 실패: ${errorMsg}`, "error", 5000);
       isUploadInProgress = false;
       return false;
     }
   } catch (error) {
-    console.error("[NaverSA] ❌ Failed to upload:", error);
+    console.error("[YTStudio] ❌ Failed to upload:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     showToast(`업로드 오류: ${errorMessage}`, "error", 5000);
     isUploadInProgress = false;
@@ -655,13 +655,13 @@ function generateDateQueue(startYear: number, startMonth: number, startDay: numb
 
   // Validate dates
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-    console.error("[NaverSA] Invalid date range");
+    console.error("[YTStudio] Invalid date range");
     return [];
   }
 
   // Ensure start is before end
   if (startDate > endDate) {
-    console.error("[NaverSA] Start date is after end date");
+    console.error("[YTStudio] Start date is after end date");
     return [];
   }
 
@@ -757,13 +757,13 @@ async function moveToNextDate(): Promise<string | null> {
  */
 async function executeWorkflow(): Promise<void> {
   if (isWorkflowPaused) {
-    console.log("[NaverSA] Workflow is paused");
+    console.log("[YTStudio] Workflow is paused");
     return;
   }
 
-  console.log("[NaverSA] ========================================");
-  console.log("[NaverSA] Starting Naver SearchAd automation workflow");
-  console.log("[NaverSA] ========================================");
+  console.log("[YTStudio] ========================================");
+  console.log("[YTStudio] Starting YT Studio automation workflow");
+  console.log("[YTStudio] ========================================");
 
   try {
     // Get current date from queue
@@ -771,7 +771,7 @@ async function executeWorkflow(): Promise<void> {
 
     if (!dateString) {
       showToast("날짜 설정 필요 또는 모든 날짜 완료", "error");
-      console.error("[NaverSA] No date available or all dates completed");
+      console.error("[YTStudio] No date available or all dates completed");
       return;
     }
 
@@ -785,7 +785,7 @@ async function executeWorkflow(): Promise<void> {
     const totalDates = dateQueue.length;
     const currentDateNumber = currentDateIndex + 1;
 
-    console.log("[NaverSA] Using date:", dateString, `(${currentDateNumber}/${totalDates})`);
+    console.log("[YTStudio] Using date:", dateString, `(${currentDateNumber}/${totalDates})`);
     showToast(`날짜 처리 중: ${dateString} (${currentDateNumber}/${totalDates})`, "loading");
 
     // Execute steps sequentially
@@ -813,7 +813,7 @@ async function executeWorkflow(): Promise<void> {
     await refreshPage();
 
   } catch (error) {
-    console.error("[NaverSA] Workflow failed:", error);
+    console.error("[YTStudio] Workflow failed:", error);
     showToast(`오류: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
     currentStep = "idle";
     isUploadInProgress = false; // Reset upload flag on error
@@ -824,10 +824,10 @@ async function executeWorkflow(): Promise<void> {
  * Continue workflow after page refresh (polling phase)
  */
 async function continueWorkflowAfterRefresh(): Promise<void> {
-  console.log("[NaverSA] Continuing workflow after refresh...");
+  console.log("[YTStudio] Continuing workflow after refresh...");
 
   // Wait for page content to fully load
-  console.log("[NaverSA] Waiting for page content to load...");
+  console.log("[YTStudio] Waiting for page content to load...");
   showToast("페이지 로딩 대기 중...", "loading");
   await new Promise(resolve => setTimeout(resolve, 3000));
 
@@ -856,9 +856,9 @@ async function continueWorkflowAfterRefresh(): Promise<void> {
     const currentDateNumber = currentDateIndex + 1;
     const currentDate = dateQueue[currentDateIndex];
 
-    console.log("[NaverSA] ========================================");
-    console.log("[NaverSA] Date workflow completed:", currentDate, `(${currentDateNumber}/${totalDates})`);
-    console.log("[NaverSA] ========================================");
+    console.log("[YTStudio] ========================================");
+    console.log("[YTStudio] Date workflow completed:", currentDate, `(${currentDateNumber}/${totalDates})`);
+    console.log("[YTStudio] ========================================");
 
     // Mark current date as completed with timestamp
     if (currentDate) {
@@ -874,7 +874,7 @@ async function continueWorkflowAfterRefresh(): Promise<void> {
         await chrome.storage.local.set({
           [STORAGE_KEYS.COMPLETED_DATES]: completedDates
         });
-        console.log("[NaverSA] Marked date as completed:", currentDate);
+        console.log("[YTStudio] Marked date as completed:", currentDate);
       }
     }
 
@@ -884,7 +884,7 @@ async function continueWorkflowAfterRefresh(): Promise<void> {
     if (nextDate) {
       // More dates to process - continue with next date
       const nextDateIndex = currentDateIndex + 1;
-      console.log("[NaverSA] Moving to next date:", nextDate, `(${nextDateIndex + 1}/${totalDates})`);
+      console.log("[YTStudio] Moving to next date:", nextDate, `(${nextDateIndex + 1}/${totalDates})`);
       showToast(`날짜 완료: ${currentDate} (${currentDateNumber}/${totalDates}). 다음 날짜로 이동...`, "success", 2000);
 
       // Wait a bit before starting next date
@@ -898,9 +898,9 @@ async function continueWorkflowAfterRefresh(): Promise<void> {
       // All dates completed
       currentStep = "idle";
       isUploadInProgress = false; // Reset upload flag when all dates completed
-      console.log("[NaverSA] ========================================");
-      console.log("[NaverSA] All dates workflow completed successfully!");
-      console.log("[NaverSA] ========================================");
+      console.log("[YTStudio] ========================================");
+      console.log("[YTStudio] All dates workflow completed successfully!");
+      console.log("[YTStudio] ========================================");
 
       // Pause workflow after successful completion
       isWorkflowPaused = true;
@@ -910,7 +910,7 @@ async function continueWorkflowAfterRefresh(): Promise<void> {
     }
 
   } catch (error) {
-    console.error("[NaverSA] Workflow continuation failed:", error);
+    console.error("[YTStudio] Workflow continuation failed:", error);
     showToast(`오류: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
     currentStep = "idle";
     isUploadInProgress = false; // Reset upload flag on error
@@ -922,10 +922,10 @@ async function continueWorkflowAfterRefresh(): Promise<void> {
  */
 function injectUI(): void {
   // Inject toast
-  if (!document.getElementById("naversa-toast")) {
+  if (!document.getElementById("ytstudio-toast")) {
     const toast = document.createElement("div");
-    toast.id = "naversa-toast";
-    toast.className = "naversa-toast";
+    toast.id = "ytstudio-toast";
+    toast.className = "ytstudio-toast";
     toast.style.cssText = `
       position: fixed;
       bottom: 100px;
@@ -952,11 +952,11 @@ function injectUI(): void {
  * Inject control buttons (Resume/Pause)
  */
 function injectControlButtons(): void {
-  if (document.getElementById("naversa-pause-btn")) return;
+  if (document.getElementById("ytstudio-pause-btn")) return;
 
   // Pause button
   const pauseBtn = document.createElement("button");
-  pauseBtn.id = "naversa-pause-btn";
+  pauseBtn.id = "ytstudio-pause-btn";
   pauseBtn.innerHTML = `
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <rect x="6" y="6" width="12" height="12"></rect>
@@ -987,7 +987,7 @@ function injectControlButtons(): void {
 
   // Resume button
   const resumeBtn = document.createElement("button");
-  resumeBtn.id = "naversa-resume-btn";
+  resumeBtn.id = "ytstudio-resume-btn";
   resumeBtn.innerHTML = `
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -1042,8 +1042,8 @@ function injectControlButtons(): void {
  * Update button visibility based on paused state
  */
 function updateControlButtons(): void {
-  const pauseBtn = document.getElementById("naversa-pause-btn");
-  const resumeBtn = document.getElementById("naversa-resume-btn");
+  const pauseBtn = document.getElementById("ytstudio-pause-btn");
+  const resumeBtn = document.getElementById("ytstudio-resume-btn");
 
   if (pauseBtn && resumeBtn) {
     if (isWorkflowPaused) {
@@ -1062,7 +1062,7 @@ function updateControlButtons(): void {
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Reserved for future message handling
-  console.log("[NaverSA] Received message:", message.type);
+  console.log("[YTStudio] Received message:", message.type);
 });
 
 /**
@@ -1072,11 +1072,11 @@ async function initialize(): Promise<void> {
   // Check if we're on the correct page
   if (!window.location.href.includes("manage.searchad.naver.com") ||
       !window.location.href.includes("reports-download")) {
-    console.log("[NaverSA] Not on reports download page");
+    console.log("[YTStudio] Not on reports download page");
     return;
   }
 
-  console.log("[NaverSA] Initializing on Naver SearchAd reports page");
+  console.log("[YTStudio] Initializing on YT Studio reports page");
 
   // Inject UI first
   injectUI();
@@ -1097,11 +1097,11 @@ async function initialize(): Promise<void> {
         const wasPaused = isWorkflowPaused;
         isWorkflowPaused = changes[STORAGE_KEYS.WORKFLOW_PAUSED].newValue !== false;
         updateControlButtons();
-        console.log("[NaverSA] Workflow paused state synced:", isWorkflowPaused);
+        console.log("[YTStudio] Workflow paused state synced:", isWorkflowPaused);
 
         // If workflow changed from paused to unpaused, execute it
         if (wasPaused && !isWorkflowPaused && currentStep === "idle") {
-          console.log("[NaverSA] Workflow resumed, executing automatically...");
+          console.log("[YTStudio] Workflow resumed, executing automatically...");
           // Small delay to ensure page is ready
           setTimeout(() => {
             executeWorkflow();
@@ -1111,7 +1111,7 @@ async function initialize(): Promise<void> {
 
       // Reset date queue when date range changes
       if (changes[STORAGE_KEYS.DATE_RANGE]) {
-        console.log("[NaverSA] Date range changed, resetting date queue...");
+        console.log("[YTStudio] Date range changed, resetting date queue...");
         chrome.storage.local.set({
           [STORAGE_KEYS.DATE_QUEUE]: [],
           [STORAGE_KEYS.CURRENT_DATE_INDEX]: 0,
@@ -1122,21 +1122,21 @@ async function initialize(): Promise<void> {
   });
 
   // Check if this is a page refresh (part of workflow)
-  const wasPolling = sessionStorage.getItem("naversa_polling") === "true";
+  const wasPolling = sessionStorage.getItem("ytstudio_polling") === "true";
 
   if (wasPolling) {
-    console.log("[NaverSA] Detected page refresh, continuing workflow...");
-    sessionStorage.removeItem("naversa_polling");
+    console.log("[YTStudio] Detected page refresh, continuing workflow...");
+    sessionStorage.removeItem("ytstudio_polling");
     await continueWorkflowAfterRefresh();
   } else {
     // If workflow is not paused, execute it automatically after a short delay
     if (!isWorkflowPaused) {
-      console.log("[NaverSA] Workflow not paused, executing automatically...");
+      console.log("[YTStudio] Workflow not paused, executing automatically...");
       // Wait a bit for page to fully load
       await new Promise(resolve => setTimeout(resolve, 2000));
       await executeWorkflow();
     } else {
-      console.log("[NaverSA] Fresh page load, workflow paused");
+      console.log("[YTStudio] Fresh page load, workflow paused");
     }
   }
 }

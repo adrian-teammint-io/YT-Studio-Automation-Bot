@@ -20,14 +20,14 @@ interface CampaignRow {
   folderId: string;
 }
 
-interface NaverSAInputProps {
+interface YTStudioInputProps {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   onDatesExtracted?: (startDate: string, endDate: string) => void;
 }
 
-export function NaverSAInput({ value, onChange, disabled = false, onDatesExtracted }: NaverSAInputProps) {
+export function YTStudioInput({ value, onChange, disabled = false, onDatesExtracted }: YTStudioInputProps) {
   const [rows, setRows] = React.useState<CampaignRow[]>([]);
 
   // Helper function to parse date from various formats
@@ -344,3 +344,4 @@ export function NaverSAInput({ value, onChange, disabled = false, onDatesExtract
     </div>
   );
 }
+

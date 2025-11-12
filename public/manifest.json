@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "[team-mint.io] NaverSA Automation Bot",
+  "name": "[team-mint.io] YTStudio Automation Bot",
   "version": "0.0.1",
-  "description": "Naver SearchAd 보고서 자동 다운로드 및 Google Sheets 업로드 봇입니다.",
+  "description": "YT Studio 보고서 자동 다운로드 및 Google Sheets 업로드 봇입니다.",
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -19,6 +19,11 @@
     {
       "matches": ["https://manage.searchad.naver.com/customers/*/reports-download*"],
       "js": ["content.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": ["https://studio.youtube.com/video/*/analytics/*"],
+      "js": ["yt-analytics-content.js"],
       "run_at": "document_end"
     }
   ],

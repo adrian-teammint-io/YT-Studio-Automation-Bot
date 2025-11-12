@@ -8,7 +8,7 @@ import { DateRangePicker } from "./DateRangePicker";
 import { STORAGE_KEYS } from "../constants/storage";
 import { cn } from "@/lib/utils";
 
-interface NaverSAListProps {
+interface YTStudioListProps {
   version: string;
   isLoading: boolean;
   isRefetching: boolean;
@@ -36,7 +36,7 @@ interface NaverSAListProps {
   completedDates?: Array<{ date: string; completedAt: string }>;
 }
 
-export function NaverSAList({
+export function YTStudioList({
   version,
   isLoading,
   isRefetching,
@@ -62,7 +62,7 @@ export function NaverSAList({
   onSetLast7Days,
   onSetLast30Days,
   completedDates = [],
-}: NaverSAListProps) {
+}: YTStudioListProps) {
   const [isWorkflowPaused, setIsWorkflowPaused] = React.useState(true);
 
   // Check if dates are configured (valid non-zero values)
@@ -127,7 +127,7 @@ export function NaverSAList({
         <div className="flex flex-col items-start gap-2">
           <div className="flex items-center gap-2">
             <h2 className="text-2xl font-bold text-foreground">
-              NaverSA 자동화 봇
+              YTStudio 자동화 봇
             </h2>
             {version && (
               <>
@@ -267,3 +267,4 @@ export function NaverSAList({
     </>
   );
 }
+

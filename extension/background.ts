@@ -1,4 +1,4 @@
-// Background service worker for NaverSA Chrome extension
+// Background service worker for YTStudio Chrome extension
 
 import { STORAGE_KEYS } from "./constants/storage";
 import { uploadTSVToSheets, validateTSVContent, logTSVStats } from "./utils/tsv-processor";
@@ -36,8 +36,8 @@ function broadcastUploadStatus(message: UploadStatusMessage): void {
  * Receives TSV content from content script and uploads to sheet
  */
 async function processTSVUpload(tsvContent: string, dateRange: any): Promise<void> {
-  console.log("[NaverSA Background] Processing TSV upload...");
-  console.log("[NaverSA Background] Received TSV content length:", tsvContent.length, "characters");
+  console.log("[YTStudio Background] Processing TSV upload...");
+  console.log("[YTStudio Background] Received TSV content length:", tsvContent.length, "characters");
 
   // Send "started" status
   broadcastUploadStatus({
@@ -49,8 +49,8 @@ async function processTSVUpload(tsvContent: string, dateRange: any): Promise<voi
     // Validate TSV content using shared utility
     const validation = validateTSVContent(tsvContent);
     if (!validation.isValid) {
-      console.error("[NaverSA Background] ❌ Invalid TSV content:", validation.error);
-      console.error("[NaverSA Background] Content preview:", tsvContent.substring(0, 500));
+      console.error("[YTStudio Background] ❌ Invalid TSV content:", validation.error);
+      console.error("[YTStudio Background] Content preview:", tsvContent.substring(0, 500));
       throw new Error(validation.error || "Invalid TSV content");
     }
 
@@ -58,16 +58,16 @@ async function processTSVUpload(tsvContent: string, dateRange: any): Promise<voi
     logTSVStats(tsvContent, "Background Script");
 
     // Upload using shared utility
-    console.log("[NaverSA Background] Uploading TSV content to Google Sheets...");
+    console.log("[YTStudio Background] Uploading TSV content to Google Sheets...");
     const result = await uploadTSVToSheets(tsvContent);
 
     if (!result.success) {
       throw new Error(result.error || "Upload failed");
     }
 
-    console.log("[NaverSA Background] ✅ Upload successful!");
-    console.log("[NaverSA Background] - Updated range:", result.updatedRange);
-    console.log("[NaverSA Background] - Rows added:", result.updatedRows);
+    console.log("[YTStudio Background] ✅ Upload successful!");
+    console.log("[YTStudio Background] - Updated range:", result.updatedRange);
+    console.log("[YTStudio Background] - Rows added:", result.updatedRows);
 
     // Send "success" status
     broadcastUploadStatus({
@@ -75,7 +75,7 @@ async function processTSVUpload(tsvContent: string, dateRange: any): Promise<voi
       status: "success",
     });
   } catch (error) {
-    console.error("[NaverSA Background] Upload failed:", error);
+    console.error("[YTStudio Background] Upload failed:", error);
 
     // Send "error" status
     broadcastUploadStatus({
@@ -97,7 +97,7 @@ let isUploadInProgress = false;
 // Listen for download events to intercept TSV downloads
 chrome.downloads.onCreated.addListener((downloadItem) => {
   if (downloadItem.filename.endsWith('.tsv')) {
-    console.log("[NaverSA Background] TSV download detected:", downloadItem.id, downloadItem.url);
+    console.log("[YTStudio Background] TSV download detected:", downloadItem.id, downloadItem.url);
     pendingDownloadId = downloadItem.id;
     downloadUrlToFetch = downloadItem.url || null;
   }
@@ -106,14 +106,14 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 chrome.downloads.onChanged.addListener(async (downloadDelta) => {
   // When download completes, try to read the file content
   if (pendingDownloadId === downloadDelta.id && downloadDelta.state?.current === 'complete') {
-    console.log("[NaverSA Background] TSV download completed:", downloadDelta.id);
+    console.log("[YTStudio Background] TSV download completed:", downloadDelta.id);
 
     // Get the download item details
     chrome.downloads.search({ id: downloadDelta.id }, async (downloads) => {
       if (!downloads || downloads.length === 0) return;
 
       const download = downloads[0];
-      console.log("[NaverSA Background] Reading completed download:", download.filename);
+      console.log("[YTStudio Background] Reading completed download:", download.filename);
 
       // Try to read the file using the File API via a content script injection
       // Since we can't read files directly, we'll use the download URL with proper timing
@@ -138,14 +138,14 @@ chrome.downloads.onChanged.addListener(async (downloadDelta) => {
             // Validate TSV content using shared utility
             const validation = validateTSVContent(content);
             if (validation.isValid) {
-              console.log("[NaverSA Background] ✅ Successfully read TSV content after download completion");
+              console.log("[YTStudio Background] ✅ Successfully read TSV content after download completion");
               // Store it for when content script requests it
               downloadUrlToFetch = download.url;
               // Content will be fetched when requested
             }
           }
         } catch (error) {
-          console.log("[NaverSA Background] Could not read file immediately after download:", error);
+          console.log("[YTStudio Background] Could not read file immediately after download:", error);
         }
       }
     });
@@ -157,7 +157,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Handle GET_TSV_FILE_CONTENT
   // Reads the most recently downloaded TSV file directly using fetch() in background script
   if (message.type === "GET_TSV_FILE_CONTENT") {
-    console.log("[NaverSA Background] Received GET_TSV_FILE_CONTENT request");
+    console.log("[YTStudio Background] Received GET_TSV_FILE_CONTENT request");
 
     // Use the utility function to find and read the latest TSV file
     // Enable polling to wait for download completion (max 15 seconds)
@@ -173,14 +173,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         const { file, content } = result;
 
-        console.log("[NaverSA Background] Found TSV file:", file.filename);
-        console.log("[NaverSA Background] File size:", content.length, "characters");
+        console.log("[YTStudio Background] Found TSV file:", file.filename);
+        console.log("[YTStudio Background] File size:", content.length, "characters");
 
         // Validate TSV content using shared utility
         const validation = validateTSVContent(content);
         if (!validation.isValid) {
-          console.error("[NaverSA Background] ❌ Invalid TSV content:", validation.error);
-          console.error("[NaverSA Background] Content preview:", content.substring(0, 500));
+          console.error("[YTStudio Background] ❌ Invalid TSV content:", validation.error);
+          console.error("[YTStudio Background] Content preview:", content.substring(0, 500));
           sendResponse({
             success: false,
             error: validation.error || "Invalid TSV content"
@@ -188,7 +188,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        console.log("[NaverSA Background] ✅ Successfully read and validated TSV content");
+        console.log("[YTStudio Background] ✅ Successfully read and validated TSV content");
         sendResponse({
           success: true,
           content: content,
@@ -196,7 +196,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       })
       .catch((error) => {
-        console.error("[NaverSA Background] Failed to read download file:", error);
+        console.error("[YTStudio Background] Failed to read download file:", error);
         sendResponse({
           success: false,
           error: `Failed to read downloaded file: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -208,7 +208,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Legacy handler for backward compatibility
   if (message.type === "GET_TSV_FILE_URL") {
-    console.log("[NaverSA Background] Received GET_TSV_FILE_URL request (legacy mode)");
+    console.log("[YTStudio Background] Received GET_TSV_FILE_URL request (legacy mode)");
 
     // Use the utility function to find the latest TSV file
     findLatestTSVFile(50)
@@ -238,11 +238,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "PROCESS_TSV_UPLOAD") {
-    console.log("[NaverSA Background] Received PROCESS_TSV_UPLOAD request");
+    console.log("[YTStudio Background] Received PROCESS_TSV_UPLOAD request");
 
     // Check if we have TSV content
     if (!message.tsvContent) {
-      console.error("[NaverSA Background] No TSV content provided");
+      console.error("[YTStudio Background] No TSV content provided");
       sendResponse({ success: false, error: "No TSV content provided" });
       return true;
     }
@@ -252,7 +252,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: true });
       })
       .catch((error) => {
-        console.error("[NaverSA Background] Processing failed:", error);
+        console.error("[YTStudio Background] Processing failed:", error);
         sendResponse({ success: false, error: error.message });
       });
 
@@ -261,11 +261,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Handle upload of downloaded TSV file to Google Sheets
   if (message.type === "UPLOAD_DOWNLOADED_TSV") {
-    console.log("[NaverSA Background] Received UPLOAD_DOWNLOADED_TSV request");
+    console.log("[YTStudio Background] Received UPLOAD_DOWNLOADED_TSV request");
 
     // Prevent duplicate uploads
     if (isUploadInProgress) {
-      console.warn("[NaverSA Background] ⚠️  Upload already in progress, rejecting duplicate request");
+      console.warn("[YTStudio Background] ⚠️  Upload already in progress, rejecting duplicate request");
       sendResponse({
         success: false,
         error: "Upload already in progress"
@@ -275,7 +275,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // Check if we have TSV content
     if (!message.tsvContent) {
-      console.error("[NaverSA Background] No TSV content provided for upload");
+      console.error("[YTStudio Background] No TSV content provided for upload");
       sendResponse({
         success: false,
         error: "No TSV content provided"
@@ -291,16 +291,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then((result) => {
         isUploadInProgress = false;
         if (result.success) {
-          console.log("[NaverSA Background] ✅ Upload successful!");
-          console.log("[NaverSA Background] - Updated range:", result.updatedRange);
-          console.log("[NaverSA Background] - Rows added:", result.updatedRows);
+          console.log("[YTStudio Background] ✅ Upload successful!");
+          console.log("[YTStudio Background] - Updated range:", result.updatedRange);
+          console.log("[YTStudio Background] - Rows added:", result.updatedRows);
           sendResponse({
             success: true,
             updatedRange: result.updatedRange,
             updatedRows: result.updatedRows
           });
         } else {
-          console.error("[NaverSA Background] Upload failed:", result.error);
+          console.error("[YTStudio Background] Upload failed:", result.error);
           sendResponse({
             success: false,
             error: result.error || "Upload failed"
@@ -309,7 +309,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
       .catch((error) => {
         isUploadInProgress = false;
-        console.error("[NaverSA Background] Upload error:", error);
+        console.error("[YTStudio Background] Upload error:", error);
         sendResponse({
           success: false,
           error: error instanceof Error ? error.message : "Unknown error"
@@ -322,11 +322,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Extension startup
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("[NaverSA Background] Extension installed/updated");
+  console.log("[YTStudio Background] Extension installed/updated");
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  console.log("[NaverSA Background] Extension started");
+  console.log("[YTStudio Background] Extension started");
 });
 
-console.log("[NaverSA Background] Background script loaded");
+console.log("[YTStudio Background] Background script loaded");

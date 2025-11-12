@@ -13,6 +13,7 @@ module.exports = (env, argv) => {
     popup: "./extension/index.tsx",
     background: "./extension/background.ts",
     content: "./extension/content.ts",
+    "yt-analytics-content": "./extension/yt-analytics-content.ts",
   },
   output: {
     path: path.resolve(__dirname, "dist"),
