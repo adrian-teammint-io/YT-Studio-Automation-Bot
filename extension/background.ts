@@ -255,6 +255,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     return true; // Keep message channel open for async response
   }
+
+  // Handle upload of downloaded TSV file to Google Sheets
+  if (message.type === "UPLOAD_DOWNLOADED_TSV") {
+    console.log("[NaverSA Background] Received UPLOAD_DOWNLOADED_TSV request");
+
+    // Check if we have TSV content
+    if (!message.tsvContent) {
+      console.error("[NaverSA Background] No TSV content provided for upload");
+      sendResponse({
+        success: false,
+        error: "No TSV content provided"
+      });
+      return true;
+    }
+
+    // Upload TSV content to Google Sheets
+    uploadTSVToSheets(message.tsvContent, message.options)
+      .then((result) => {
+        if (result.success) {
+          console.log("[NaverSA Background] ✅ Upload successful!");
+          console.log("[NaverSA Background] - Updated range:", result.updatedRange);
+          console.log("[NaverSA Background] - Rows added:", result.updatedRows);
+          sendResponse({
+            success: true,
+            updatedRange: result.updatedRange,
+            updatedRows: result.updatedRows
+          });
+        } else {
+          console.error("[NaverSA Background] Upload failed:", result.error);
+          sendResponse({
+            success: false,
+            error: result.error || "Upload failed"
+          });
+        }
+      })
+      .catch((error) => {
+        console.error("[NaverSA Background] Upload error:", error);
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+      });
+
+    return true; // Keep message channel open for async response
+  }
 });
 
 // Extension startup

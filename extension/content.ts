@@ -18,7 +18,7 @@ const POLL_INTERVAL = 2000; // 2 seconds between table checks
 const MAX_POLL_ATTEMPTS = 30; // 60 seconds total polling
 
 // Workflow state
-let currentStep: "idle" | "clicking_tab" | "selecting_dropdown" | "setting_date" | "creating_report" | "waiting_refresh" | "polling_table" | "downloading" = "idle";
+let currentStep: "idle" | "clicking_tab" | "selecting_dropdown" | "setting_date" | "creating_report" | "waiting_refresh" | "polling_table" | "downloading" | "uploading" = "idle";
 let isWorkflowPaused = true; // Default to paused
 let pollAttempts = 0;
 
@@ -546,6 +546,12 @@ async function downloadTSV(url: string): Promise<boolean> {
 
           // Show toast for 5 seconds with file details
           showToast(`✅ 파일 발견: ${filename} (${rows}행, ${contentLength}자)`, "success", 5000);
+
+          // Upload to Google Sheets
+          if (response.content) {
+            currentStep = "uploading";
+            await uploadToGoogleSheets(response.content);
+          }
         } else {
           const errorMsg = response.error || "Unknown error";
           console.warn("[NaverSA] ⚠️  Could not retrieve file info:", errorMsg);
@@ -569,8 +575,60 @@ async function downloadTSV(url: string): Promise<boolean> {
   }
 }
 
+/**
+ * Step 8: Upload downloaded TSV file to Google Sheets
+ */
+async function uploadToGoogleSheets(tsvContent: string): Promise<boolean> {
+  console.log("[NaverSA] Step 8: Uploading to Google Sheets...");
+  showToast("Google Sheets 업로드 중...", "loading");
 
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "UPLOAD_DOWNLOADED_TSV",
+      tsvContent: tsvContent
+    });
 
+    if (!response) {
+      console.warn("[NaverSA] ⚠️  No response from background script");
+      showToast("업로드 응답 없음", "error");
+      return false;
+    }
+
+    if (response.success) {
+      const updatedRows = response.updatedRows || 0;
+      const updatedRange = response.updatedRange || "N/A";
+
+      console.log("[NaverSA] ========================================");
+      console.log("[NaverSA] ✅ UPLOAD SUCCESSFUL!");
+      console.log(`[NaverSA]    📊 Rows added: ${updatedRows}`);
+      console.log(`[NaverSA]    📍 Range: ${updatedRange}`);
+      console.log("[NaverSA] ========================================");
+
+      // Parse the range to extract row numbers for user guidance
+      const rangeMatch = updatedRange.match(/(\d+):(\w+)(\d+)/);
+      if (rangeMatch) {
+        const startRow = rangeMatch[1];
+        const endRow = rangeMatch[3];
+        showToast(`✅ 업로드 완료: ${updatedRows}행 추가됨 (행 ${startRow}-${endRow})`, "success", 5000);
+        console.log(`[NaverSA] 📌 IMPORTANT: Scroll down to row ${startRow} in your Google Sheet to see the uploaded data!`);
+      } else {
+        showToast(`✅ 업로드 완료: ${updatedRows}행 추가됨`, "success", 5000);
+      }
+
+      return true;
+    } else {
+      const errorMsg = response.error || "Unknown error";
+      console.error("[NaverSA] ❌ Upload failed:", errorMsg);
+      showToast(`업로드 실패: ${errorMsg}`, "error", 5000);
+      return false;
+    }
+  } catch (error) {
+    console.error("[NaverSA] ❌ Failed to upload:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    showToast(`업로드 오류: ${errorMessage}`, "error", 5000);
+    return false;
+  }
+}
 
 /**
  * Main workflow execution
