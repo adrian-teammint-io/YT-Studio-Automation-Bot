@@ -74,7 +74,8 @@ async function fetchLatestDownload(): Promise<{ content: string; filename: strin
     console.log("========================================");
 
     const downloadsFolder = getDownloadsFolder();
-    console.log(`Downloads folder: ${downloadsFolder}`);
+    console.log(`📂 Downloads folder: ${downloadsFolder}`);
+    console.log(`🔍 Searching for latest TSV file...`);
 
     const latestFile = findLatestTSVFile(downloadsFolder);
 
@@ -85,10 +86,11 @@ async function fetchLatestDownload(): Promise<{ content: string; filename: strin
     const { filePath, stats } = latestFile;
     const filename = path.basename(filePath);
 
-    console.log(`\nFound latest TSV file: ${filename}`);
-    console.log(`File path: ${filePath}`);
-    console.log(`File size: ${stats.size} bytes`);
-    console.log(`Modified: ${stats.mtime.toLocaleString()}`);
+    console.log(`\n🎯 FOUND LATEST TSV FILE:`);
+    console.log(`   📄 Filename: ${filename}`);
+    console.log(`   📁 Path: ${filePath}`);
+    console.log(`   📊 Size: ${stats.size} bytes`);
+    console.log(`   🕐 Modified: ${stats.mtime.toLocaleString()}`);
     console.log("");
 
     // Read the file content
@@ -123,6 +125,10 @@ async function fetchLatestDownload(): Promise<{ content: string; filename: strin
     console.log("\n========================================");
     console.log("✅ Successfully fetched latest download");
     console.log("========================================");
+    console.log(`📦 File: ${filename}`);
+    console.log(`📍 Location: ${filePath}`);
+    console.log(`📏 Size: ${content.length} characters (${validation.stats?.lines || 0} rows)`);
+    console.log("========================================\n");
 
     return {
       content,

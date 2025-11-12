@@ -2,6 +2,7 @@
 
 import { STORAGE_KEYS } from "./constants/storage";
 import { uploadTSVToSheets, validateTSVContent, logTSVStats } from "./utils/tsv-processor";
+import { findLatestTSVFile, getDownloadContent, getLatestTSVFile } from "./utils/file-finder";
 
 interface UploadStatusMessage {
   type: "UPLOAD_STATUS";
@@ -155,127 +156,81 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "GET_TSV_FILE_CONTENT") {
     console.log("[NaverSA Background] Received GET_TSV_FILE_CONTENT request");
 
-    // Find the most recent TSV download
-    chrome.downloads.search(
-      {
-        orderBy: ["-startTime"], // Most recent first
-        limit: 10, // Check more downloads in case some are still in progress
-      },
-      async (downloads) => {
-        if (chrome.runtime.lastError) {
-          console.error("[NaverSA Background] Error searching downloads:", chrome.runtime.lastError);
-          sendResponse({ success: false, error: chrome.runtime.lastError.message });
-          return;
-        }
-
-        if (!downloads || downloads.length === 0) {
-          sendResponse({ success: false, error: "No recent downloads found" });
-          return;
-        }
-
-        console.log("[NaverSA Background] Found", downloads.length, "recent downloads");
-
-        // Find TSV file that's complete
-        const tsvDownload = downloads.find(
-          (d) => d.filename.endsWith(".tsv") && d.state === "complete"
-        );
-
-        if (!tsvDownload) {
-          // Check if there's a TSV download in progress
-          const inProgress = downloads.find(
-            (d) => d.filename.endsWith(".tsv") && d.state === "in_progress"
-          );
-          if (inProgress) {
-            sendResponse({
-              success: false,
-              error: "TSV file is still downloading. Please wait a moment and try again."
-            });
-            return;
-          }
-          sendResponse({ success: false, error: "No completed TSV file found in recent downloads" });
-          return;
-        }
-
-        console.log("[NaverSA Background] Found TSV file:", tsvDownload.filename);
-        console.log("[NaverSA Background] Download URL:", tsvDownload.url);
-
-        // Read the file directly using fetch() - this works in background script context
-        try {
-          if (!tsvDownload.url) {
-            throw new Error("Download URL not available");
-          }
-
-          console.log("[NaverSA Background] Reading downloaded file content...");
-
-          // Fetch the file content
-          const response = await fetch(tsvDownload.url);
-          if (!response.ok) {
-            throw new Error(`Failed to fetch file: ${response.statusText}`);
-          }
-
-          // Get file as text
-          const content = await response.text();
-          console.log("[NaverSA Background] File read successfully, size:", content.length, "characters");
-
-          // Validate TSV content using shared utility
-          const validation = validateTSVContent(content);
-          if (!validation.isValid) {
-            console.error("[NaverSA Background] ❌ Invalid TSV content:", validation.error);
-            console.error("[NaverSA Background] Content preview:", content.substring(0, 500));
-            throw new Error(validation.error || "Invalid TSV content");
-          }
-
-          console.log("[NaverSA Background] ✅ Successfully read and validated TSV content");
-          sendResponse({
-            success: true,
-            content: content,
-            filename: tsvDownload.filename
-          });
-        } catch (error) {
-          console.error("[NaverSA Background] Failed to read download file:", error);
+    // Use the utility function to find and read the latest TSV file
+    // Enable polling to wait for download completion (max 15 seconds)
+    getLatestTSVFile(50, true, 15000)
+      .then((result) => {
+        if (!result) {
           sendResponse({
             success: false,
-            error: `Failed to read downloaded file: ${error instanceof Error ? error.message : 'Unknown error'}`
+            error: "No completed TSV file found in recent downloads (timeout after 15 seconds)"
           });
+          return;
         }
-      }
-    );
+
+        const { file, content } = result;
+
+        console.log("[NaverSA Background] Found TSV file:", file.filename);
+        console.log("[NaverSA Background] File size:", content.length, "characters");
+
+        // Validate TSV content using shared utility
+        const validation = validateTSVContent(content);
+        if (!validation.isValid) {
+          console.error("[NaverSA Background] ❌ Invalid TSV content:", validation.error);
+          console.error("[NaverSA Background] Content preview:", content.substring(0, 500));
+          sendResponse({
+            success: false,
+            error: validation.error || "Invalid TSV content"
+          });
+          return;
+        }
+
+        console.log("[NaverSA Background] ✅ Successfully read and validated TSV content");
+        sendResponse({
+          success: true,
+          content: content,
+          filename: file.filename
+        });
+      })
+      .catch((error) => {
+        console.error("[NaverSA Background] Failed to read download file:", error);
+        sendResponse({
+          success: false,
+          error: `Failed to read downloaded file: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
+      });
 
     return true; // Keep message channel open for async response
   }
 
   // Legacy handler for backward compatibility
   if (message.type === "GET_TSV_FILE_URL") {
-    console.log("[NaverSA Background] Received GET_TSV_FILE_URL request (legacy mode - redirecting)");
-    // Call the new handler
-    chrome.runtime.onMessage.hasListeners();
-    // Just redirect to new handler by calling it
-    const handler = chrome.runtime.onMessage;
-    // Actually, just handle it the same way
-    chrome.downloads.search(
-      {
-        orderBy: ["-startTime"],
-        limit: 10,
-      },
-      (downloads) => {
-        if (!downloads || downloads.length === 0) {
-          sendResponse({ success: false, error: "No recent downloads found" });
+    console.log("[NaverSA Background] Received GET_TSV_FILE_URL request (legacy mode)");
+
+    // Use the utility function to find the latest TSV file
+    findLatestTSVFile(50)
+      .then((file) => {
+        if (!file || !file.url) {
+          sendResponse({
+            success: false,
+            error: "No TSV file found"
+          });
           return;
         }
-        const tsvDownload = downloads.find(
-          (d) => d.filename.endsWith(".tsv") && d.state === "complete"
-        );
-        if (!tsvDownload || !tsvDownload.url) {
-          sendResponse({ success: false, error: "No TSV file found" });
-          return;
-        }
+
         sendResponse({
           success: true,
-          url: tsvDownload.url,
-          filename: tsvDownload.filename
+          url: file.url,
+          filename: file.filename
         });
-      }
-    );
+      })
+      .catch((error) => {
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+      });
+
     return true;
   }
 
