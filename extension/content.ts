@@ -21,6 +21,7 @@ const MAX_POLL_ATTEMPTS = 30; // 60 seconds total polling
 let currentStep: "idle" | "clicking_tab" | "selecting_dropdown" | "setting_date" | "creating_report" | "waiting_refresh" | "polling_table" | "downloading" | "uploading" = "idle";
 let isWorkflowPaused = true; // Default to paused
 let pollAttempts = 0;
+let isUploadInProgress = false; // Flag to prevent duplicate uploads
 
 /**
  * Show toast notification at bottom of page
@@ -547,10 +548,13 @@ async function downloadTSV(url: string): Promise<boolean> {
           // Show toast for 5 seconds with file details
           showToast(`✅ 파일 발견: ${filename} (${rows}행, ${contentLength}자)`, "success", 5000);
 
-          // Upload to Google Sheets
-          if (response.content) {
+          // Upload to Google Sheets (only if not already uploading)
+          if (response.content && !isUploadInProgress) {
             currentStep = "uploading";
             await uploadToGoogleSheets(response.content);
+          } else if (isUploadInProgress) {
+            console.log("[NaverSA] ⚠️  Upload already in progress, skipping duplicate upload");
+            showToast("업로드가 이미 진행 중입니다", "info", 3000);
           }
         } else {
           const errorMsg = response.error || "Unknown error";
@@ -579,6 +583,14 @@ async function downloadTSV(url: string): Promise<boolean> {
  * Step 8: Upload downloaded TSV file to Google Sheets
  */
 async function uploadToGoogleSheets(tsvContent: string): Promise<boolean> {
+  // Prevent duplicate uploads
+  if (isUploadInProgress) {
+    console.log("[NaverSA] ⚠️  Upload already in progress, skipping duplicate upload");
+    showToast("업로드가 이미 진행 중입니다", "info", 3000);
+    return false;
+  }
+
+  isUploadInProgress = true;
   console.log("[NaverSA] Step 8: Uploading to Google Sheets...");
   showToast("Google Sheets 업로드 중...", "loading");
 
@@ -615,19 +627,129 @@ async function uploadToGoogleSheets(tsvContent: string): Promise<boolean> {
         showToast(`✅ 업로드 완료: ${updatedRows}행 추가됨`, "success", 5000);
       }
 
+      isUploadInProgress = false;
       return true;
     } else {
       const errorMsg = response.error || "Unknown error";
       console.error("[NaverSA] ❌ Upload failed:", errorMsg);
       showToast(`업로드 실패: ${errorMsg}`, "error", 5000);
+      isUploadInProgress = false;
       return false;
     }
   } catch (error) {
     console.error("[NaverSA] ❌ Failed to upload:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     showToast(`업로드 오류: ${errorMessage}`, "error", 5000);
+    isUploadInProgress = false;
     return false;
   }
+}
+
+/**
+ * Generate array of dates between start and end date (inclusive)
+ */
+function generateDateQueue(startYear: number, startMonth: number, startDay: number, endYear: number, endMonth: number, endDay: number): string[] {
+  const dates: string[] = [];
+  const startDate = new Date(startYear, startMonth - 1, startDay);
+  const endDate = new Date(endYear, endMonth - 1, endDay);
+
+  // Validate dates
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    console.error("[NaverSA] Invalid date range");
+    return [];
+  }
+
+  // Ensure start is before end
+  if (startDate > endDate) {
+    console.error("[NaverSA] Start date is after end date");
+    return [];
+  }
+
+  // Generate all dates between start and end (inclusive)
+  const currentDate = new Date(startDate);
+  while (currentDate <= endDate) {
+    const year = currentDate.getFullYear();
+    const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+    const day = String(currentDate.getDate()).padStart(2, '0');
+    dates.push(`${year}-${month}-${day}`);
+
+    // Move to next day
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  return dates;
+}
+
+/**
+ * Get current date from queue or initialize queue
+ */
+async function getCurrentDate(): Promise<string | null> {
+  const result = await chrome.storage.local.get([
+    STORAGE_KEYS.DATE_RANGE,
+    STORAGE_KEYS.DATE_QUEUE,
+    STORAGE_KEYS.CURRENT_DATE_INDEX
+  ]);
+
+  const dateRange = result[STORAGE_KEYS.DATE_RANGE];
+  if (!dateRange) {
+    return null;
+  }
+
+  let dateQueue: string[] = result[STORAGE_KEYS.DATE_QUEUE] || [];
+  let currentDateIndex: number = result[STORAGE_KEYS.CURRENT_DATE_INDEX] || 0;
+
+  // Initialize or regenerate queue if needed
+  if (dateQueue.length === 0 || currentDateIndex >= dateQueue.length) {
+    dateQueue = generateDateQueue(
+      dateRange.startYear,
+      dateRange.startMonth,
+      dateRange.startDay,
+      dateRange.endYear,
+      dateRange.endMonth,
+      dateRange.endDay
+    );
+
+    if (dateQueue.length === 0) {
+      return null;
+    }
+
+    currentDateIndex = 0;
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.DATE_QUEUE]: dateQueue,
+      [STORAGE_KEYS.CURRENT_DATE_INDEX]: currentDateIndex
+    });
+  }
+
+  return dateQueue[currentDateIndex] || null;
+}
+
+/**
+ * Move to next date in queue
+ */
+async function moveToNextDate(): Promise<string | null> {
+  const result = await chrome.storage.local.get([
+    STORAGE_KEYS.DATE_QUEUE,
+    STORAGE_KEYS.CURRENT_DATE_INDEX
+  ]);
+
+  const dateQueue: string[] = result[STORAGE_KEYS.DATE_QUEUE] || [];
+  let currentDateIndex: number = result[STORAGE_KEYS.CURRENT_DATE_INDEX] || 0;
+
+  currentDateIndex++;
+
+  if (currentDateIndex >= dateQueue.length) {
+    // All dates completed
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.CURRENT_DATE_INDEX]: currentDateIndex
+    });
+    return null;
+  }
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.CURRENT_DATE_INDEX]: currentDateIndex
+  });
+
+  return dateQueue[currentDateIndex] || null;
 }
 
 /**
@@ -644,19 +766,27 @@ async function executeWorkflow(): Promise<void> {
   console.log("[NaverSA] ========================================");
 
   try {
-    // Get configured date
-    const result = await chrome.storage.local.get([STORAGE_KEYS.DATE_RANGE]);
-    const dateRange = result[STORAGE_KEYS.DATE_RANGE];
+    // Get current date from queue
+    const dateString = await getCurrentDate();
 
-    if (!dateRange) {
-      showToast("날짜 설정 필요", "error");
-      console.error("[NaverSA] Date range not configured");
+    if (!dateString) {
+      showToast("날짜 설정 필요 또는 모든 날짜 완료", "error");
+      console.error("[NaverSA] No date available or all dates completed");
       return;
     }
 
-    // Format date as YYYY-MM-DD
-    const dateString = `${dateRange.startYear}-${String(dateRange.startMonth).padStart(2, '0')}-${String(dateRange.startDay).padStart(2, '0')}`;
-    console.log("[NaverSA] Using date:", dateString);
+    // Get date queue info for progress display
+    const result = await chrome.storage.local.get([
+      STORAGE_KEYS.DATE_QUEUE,
+      STORAGE_KEYS.CURRENT_DATE_INDEX
+    ]);
+    const dateQueue: string[] = result[STORAGE_KEYS.DATE_QUEUE] || [];
+    const currentDateIndex: number = result[STORAGE_KEYS.CURRENT_DATE_INDEX] || 0;
+    const totalDates = dateQueue.length;
+    const currentDateNumber = currentDateIndex + 1;
+
+    console.log("[NaverSA] Using date:", dateString, `(${currentDateNumber}/${totalDates})`);
+    showToast(`날짜 처리 중: ${dateString} (${currentDateNumber}/${totalDates})`, "loading");
 
     // Execute steps sequentially
     currentStep = "clicking_tab";
@@ -686,6 +816,7 @@ async function executeWorkflow(): Promise<void> {
     console.error("[NaverSA] Workflow failed:", error);
     showToast(`오류: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
     currentStep = "idle";
+    isUploadInProgress = false; // Reset upload flag on error
   }
 }
 
@@ -713,15 +844,76 @@ async function continueWorkflowAfterRefresh(): Promise<void> {
       throw new Error("Failed to download TSV");
     }
 
-    currentStep = "idle";
+    // Get current date info before moving to next
+    const result = await chrome.storage.local.get([
+      STORAGE_KEYS.DATE_QUEUE,
+      STORAGE_KEYS.CURRENT_DATE_INDEX,
+      STORAGE_KEYS.COMPLETED_DATES
+    ]);
+    const dateQueue: string[] = result[STORAGE_KEYS.DATE_QUEUE] || [];
+    const currentDateIndex: number = result[STORAGE_KEYS.CURRENT_DATE_INDEX] || 0;
+    const totalDates = dateQueue.length;
+    const currentDateNumber = currentDateIndex + 1;
+    const currentDate = dateQueue[currentDateIndex];
+
     console.log("[NaverSA] ========================================");
-    console.log("[NaverSA] Workflow completed successfully!");
+    console.log("[NaverSA] Date workflow completed:", currentDate, `(${currentDateNumber}/${totalDates})`);
     console.log("[NaverSA] ========================================");
+
+    // Mark current date as completed with timestamp
+    if (currentDate) {
+      const completedDates: Array<{ date: string; completedAt: string }> = result[STORAGE_KEYS.COMPLETED_DATES] || [];
+      const existingIndex = completedDates.findIndex(item => item.date === currentDate);
+
+      if (existingIndex === -1) {
+        // Add new completed date with timestamp
+        completedDates.push({
+          date: currentDate,
+          completedAt: new Date().toISOString()
+        });
+        await chrome.storage.local.set({
+          [STORAGE_KEYS.COMPLETED_DATES]: completedDates
+        });
+        console.log("[NaverSA] Marked date as completed:", currentDate);
+      }
+    }
+
+    // Move to next date
+    const nextDate = await moveToNextDate();
+
+    if (nextDate) {
+      // More dates to process - continue with next date
+      const nextDateIndex = currentDateIndex + 1;
+      console.log("[NaverSA] Moving to next date:", nextDate, `(${nextDateIndex + 1}/${totalDates})`);
+      showToast(`날짜 완료: ${currentDate} (${currentDateNumber}/${totalDates}). 다음 날짜로 이동...`, "success", 2000);
+
+      // Wait a bit before starting next date
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Execute workflow for next date
+      currentStep = "idle";
+      isUploadInProgress = false; // Reset upload flag for next date
+      await executeWorkflow();
+    } else {
+      // All dates completed
+      currentStep = "idle";
+      isUploadInProgress = false; // Reset upload flag when all dates completed
+      console.log("[NaverSA] ========================================");
+      console.log("[NaverSA] All dates workflow completed successfully!");
+      console.log("[NaverSA] ========================================");
+
+      // Pause workflow after successful completion
+      isWorkflowPaused = true;
+      chrome.storage.local.set({ [STORAGE_KEYS.WORKFLOW_PAUSED]: true });
+      updateControlButtons();
+      showToast(`모든 날짜 완료! (총 ${totalDates}개 날짜 처리됨)`, "success", 5000);
+    }
 
   } catch (error) {
     console.error("[NaverSA] Workflow continuation failed:", error);
     showToast(`오류: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
     currentStep = "idle";
+    isUploadInProgress = false; // Reset upload flag on error
   }
 }
 
@@ -886,12 +1078,48 @@ async function initialize(): Promise<void> {
 
   console.log("[NaverSA] Initializing on Naver SearchAd reports page");
 
+  // Inject UI first
+  injectUI();
+
+  // Wait a moment for storage to sync (in case popup just set it)
+  await new Promise(resolve => setTimeout(resolve, 500));
+
   // Restore paused state
   const result = await chrome.storage.local.get([STORAGE_KEYS.WORKFLOW_PAUSED]);
   isWorkflowPaused = result[STORAGE_KEYS.WORKFLOW_PAUSED] !== false; // Default to paused
+  updateControlButtons();
 
-  // Inject UI
-  injectUI();
+  // Listen for storage changes to sync button state and execute workflow
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local") {
+      // Handle workflow paused state changes
+      if (changes[STORAGE_KEYS.WORKFLOW_PAUSED]) {
+        const wasPaused = isWorkflowPaused;
+        isWorkflowPaused = changes[STORAGE_KEYS.WORKFLOW_PAUSED].newValue !== false;
+        updateControlButtons();
+        console.log("[NaverSA] Workflow paused state synced:", isWorkflowPaused);
+
+        // If workflow changed from paused to unpaused, execute it
+        if (wasPaused && !isWorkflowPaused && currentStep === "idle") {
+          console.log("[NaverSA] Workflow resumed, executing automatically...");
+          // Small delay to ensure page is ready
+          setTimeout(() => {
+            executeWorkflow();
+          }, 1000);
+        }
+      }
+
+      // Reset date queue when date range changes
+      if (changes[STORAGE_KEYS.DATE_RANGE]) {
+        console.log("[NaverSA] Date range changed, resetting date queue...");
+        chrome.storage.local.set({
+          [STORAGE_KEYS.DATE_QUEUE]: [],
+          [STORAGE_KEYS.CURRENT_DATE_INDEX]: 0,
+          [STORAGE_KEYS.COMPLETED_DATES]: []
+        });
+      }
+    }
+  });
 
   // Check if this is a page refresh (part of workflow)
   const wasPolling = sessionStorage.getItem("naversa_polling") === "true";
@@ -901,7 +1129,15 @@ async function initialize(): Promise<void> {
     sessionStorage.removeItem("naversa_polling");
     await continueWorkflowAfterRefresh();
   } else {
-    console.log("[NaverSA] Fresh page load, workflow paused by default");
+    // If workflow is not paused, execute it automatically after a short delay
+    if (!isWorkflowPaused) {
+      console.log("[NaverSA] Workflow not paused, executing automatically...");
+      // Wait a bit for page to fully load
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      await executeWorkflow();
+    } else {
+      console.log("[NaverSA] Fresh page load, workflow paused");
+    }
   }
 }
 

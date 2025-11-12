@@ -91,6 +91,9 @@ let pendingDownloadId: number | null = null;
 let downloadUrlToFetch: string | null = null;
 let downloadCompleteCallbacks: Map<number, (content: string) => void> = new Map();
 
+// Flag to prevent duplicate uploads
+let isUploadInProgress = false;
+
 // Listen for download events to intercept TSV downloads
 chrome.downloads.onCreated.addListener((downloadItem) => {
   if (downloadItem.filename.endsWith('.tsv')) {
@@ -260,6 +263,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "UPLOAD_DOWNLOADED_TSV") {
     console.log("[NaverSA Background] Received UPLOAD_DOWNLOADED_TSV request");
 
+    // Prevent duplicate uploads
+    if (isUploadInProgress) {
+      console.warn("[NaverSA Background] ⚠️  Upload already in progress, rejecting duplicate request");
+      sendResponse({
+        success: false,
+        error: "Upload already in progress"
+      });
+      return true;
+    }
+
     // Check if we have TSV content
     if (!message.tsvContent) {
       console.error("[NaverSA Background] No TSV content provided for upload");
@@ -270,9 +283,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
+    // Set upload flag
+    isUploadInProgress = true;
+
     // Upload TSV content to Google Sheets
     uploadTSVToSheets(message.tsvContent, message.options)
       .then((result) => {
+        isUploadInProgress = false;
         if (result.success) {
           console.log("[NaverSA Background] ✅ Upload successful!");
           console.log("[NaverSA Background] - Updated range:", result.updatedRange);
@@ -291,6 +308,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       })
       .catch((error) => {
+        isUploadInProgress = false;
         console.error("[NaverSA Background] Upload error:", error);
         sendResponse({
           success: false,

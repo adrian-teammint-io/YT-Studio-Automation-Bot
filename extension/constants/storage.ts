@@ -12,4 +12,7 @@ export const STORAGE_KEYS = {
   BUTTONS_VISIBLE: "naversa_buttons_visible",
   SHEET_ID: "naversa_sheet_id",
   SHEET_TAB_NAME: "naversa_sheet_tab_name",
+  DATE_QUEUE: "naversa_date_queue",
+  CURRENT_DATE_INDEX: "naversa_current_date_index",
+  COMPLETED_DATES: "naversa_completed_dates",
 } as const;

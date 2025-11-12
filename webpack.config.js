@@ -51,9 +51,10 @@ module.exports = (env, argv) => {
       patterns: [
         { from: "public/manifest.json", to: "manifest.json" },
         { from: "extension/popup.html", to: "popup.html" },
-        { from: "public/icon16.png", to: "icon16.png" },
-        { from: "public/icon48.png", to: "icon48.png" },
-        { from: "public/icon128.png", to: "icon128.png" },
+        { from: "icons/icon16.png", to: "icon16.png" },
+        { from: "icons/icon32.png", to: "icon32.png" },
+        { from: "icons/icon48.png", to: "icon48.png" },
+        { from: "icons/icon128.png", to: "icon128.png" },
         { from: "public/google-sheets-icon.png", to: "google-sheets-icon.png" },
       ],
     }),

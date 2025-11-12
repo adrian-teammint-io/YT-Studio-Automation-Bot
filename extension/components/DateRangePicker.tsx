@@ -98,10 +98,10 @@ export function DateRangePicker({
             <div className="space-y-1">
               <input
                 type="number"
-                min="1"
+                min="0"
                 max="31"
-                value={startDay}
-                onChange={(e) => onStartDayChange(parseInt(e.target.value) || 1)}
+                value={startDay || ""}
+                onChange={(e) => onStartDayChange(parseInt(e.target.value) || 0)}
                 className="w-full px-3 py-2 border rounded-md text-sm"
                 placeholder="Day"
                 disabled={isLoading}
@@ -111,10 +111,10 @@ export function DateRangePicker({
             <div className="space-y-1">
               <input
                 type="number"
-                min="1"
+                min="0"
                 max="12"
-                value={startMonth}
-                onChange={(e) => onStartMonthChange(parseInt(e.target.value) || 1)}
+                value={startMonth || ""}
+                onChange={(e) => onStartMonthChange(parseInt(e.target.value) || 0)}
                 className="w-full px-3 py-2 border rounded-md text-sm"
                 placeholder="Month"
                 disabled={isLoading}
@@ -124,10 +124,10 @@ export function DateRangePicker({
             <div className="space-y-1">
               <input
                 type="number"
-                min="2020"
+                min="0"
                 max="2099"
-                value={startYear}
-                onChange={(e) => onStartYearChange(parseInt(e.target.value) || 2025)}
+                value={startYear || ""}
+                onChange={(e) => onStartYearChange(parseInt(e.target.value) || 0)}
                 className="w-full px-3 py-2 border rounded-md text-sm"
                 placeholder="Year"
                 disabled={isLoading}
@@ -146,10 +146,10 @@ export function DateRangePicker({
             <div className="space-y-1">
               <input
                 type="number"
-                min="1"
+                min="0"
                 max="31"
-                value={endDay}
-                onChange={(e) => onEndDayChange(parseInt(e.target.value) || 1)}
+                value={endDay || ""}
+                onChange={(e) => onEndDayChange(parseInt(e.target.value) || 0)}
                 className="w-full px-3 py-2 border rounded-md text-sm"
                 placeholder="Day"
                 disabled={isLoading}
@@ -159,10 +159,10 @@ export function DateRangePicker({
             <div className="space-y-1">
               <input
                 type="number"
-                min="1"
+                min="0"
                 max="12"
-                value={endMonth}
-                onChange={(e) => onEndMonthChange(parseInt(e.target.value) || 1)}
+                value={endMonth || ""}
+                onChange={(e) => onEndMonthChange(parseInt(e.target.value) || 0)}
                 className="w-full px-3 py-2 border rounded-md text-sm"
                 placeholder="Month"
                 disabled={isLoading}
@@ -172,10 +172,10 @@ export function DateRangePicker({
             <div className="space-y-1">
               <input
                 type="number"
-                min="2020"
+                min="0"
                 max="2099"
-                value={endYear}
-                onChange={(e) => onEndYearChange(parseInt(e.target.value) || 2025)}
+                value={endYear || ""}
+                onChange={(e) => onEndYearChange(parseInt(e.target.value) || 0)}
                 className="w-full px-3 py-2 border rounded-md text-sm"
                 placeholder="Year"
                 disabled={isLoading}

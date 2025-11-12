@@ -2,13 +2,10 @@
 
 import * as React from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, Trash2, CheckCircle2, Eye, EyeOff } from "lucide-react";
+import { ChevronLeft, Trash2, Eye, EyeOff } from "lucide-react";
 import { DateRangePicker } from "./DateRangePicker";
-import { CampaignInput } from "./CampaignInput";
 
 interface SettingsViewProps {
-  campaignDataText: string;
-  lastSavedCampaignData: string;
   startYear: number;
   startMonth: number;
   startDay: number;
@@ -17,7 +14,6 @@ interface SettingsViewProps {
   endDay: number;
   isLoading: boolean;
   buttonsVisible: boolean;
-  onCampaignDataChange: (value: string) => void;
   onStartYearChange: (value: number) => void;
   onStartMonthChange: (value: number) => void;
   onStartDayChange: (value: number) => void;
@@ -33,24 +29,7 @@ interface SettingsViewProps {
   onToggleButtons: () => void;
 }
 
-function parseDateToComponents(dateStr: string): { year: number; month: number; day: number } | null {
-  try {
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return null;
-
-    return {
-      year: date.getFullYear(),
-      month: date.getMonth() + 1, // getMonth() returns 0-11
-      day: date.getDate()
-    };
-  } catch {
-    return null;
-  }
-}
-
 export function SettingsView({
-  campaignDataText,
-  lastSavedCampaignData,
   startYear,
   startMonth,
   startDay,
@@ -59,7 +38,6 @@ export function SettingsView({
   endDay,
   isLoading,
   buttonsVisible,
-  onCampaignDataChange,
   onStartYearChange,
   onStartMonthChange,
   onStartDayChange,
@@ -74,23 +52,6 @@ export function SettingsView({
   onBack,
   onToggleButtons,
 }: SettingsViewProps) {
-  const handleDatesExtracted = (startDate: string, endDate: string) => {
-    const start = parseDateToComponents(startDate);
-    const end = parseDateToComponents(endDate);
-
-    if (start) {
-      onStartYearChange(start.year);
-      onStartMonthChange(start.month);
-      onStartDayChange(start.day);
-    }
-
-    if (end) {
-      onEndYearChange(end.year);
-      onEndMonthChange(end.month);
-      onEndDayChange(end.day);
-    }
-  };
-
   return (
     <>
       <div className="flex items-center justify-between">
@@ -134,30 +95,6 @@ export function SettingsView({
         isLoading={isLoading}
       />
 
-
-      <div className="space-y-6">
-        {/* Campaign Data Input */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label htmlFor="campaign-data" className="font-bold text-xl text-foreground">
-              {/* Campaign Name & ID */}
-              캠페인 이름 및 ID
-            </label>
-            {campaignDataText.trim() && lastSavedCampaignData === campaignDataText && (
-              <div className="flex items-center gap-1 text-xs text-green-600">
-                <CheckCircle2 className="size-3" />
-                <span>Saved</span>
-              </div>
-            )}
-          </div>
-          <CampaignInput
-            value={campaignDataText}
-            onChange={onCampaignDataChange}
-            disabled={isLoading}
-            onDatesExtracted={handleDatesExtracted}
-          />
-        </div>
-      </div>
 
       {/* Button Visibility Toggle */}
       <div className="space-y-2 gap-4">

@@ -20,14 +20,14 @@ interface CampaignRow {
   folderId: string;
 }
 
-interface CampaignInputProps {
+interface NaverSAInputProps {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   onDatesExtracted?: (startDate: string, endDate: string) => void;
 }
 
-export function CampaignInput({ value, onChange, disabled = false, onDatesExtracted }: CampaignInputProps) {
+export function NaverSAInput({ value, onChange, disabled = false, onDatesExtracted }: NaverSAInputProps) {
   const [rows, setRows] = React.useState<CampaignRow[]>([]);
 
   // Helper function to parse date from various formats

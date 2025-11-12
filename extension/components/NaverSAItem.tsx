@@ -8,7 +8,7 @@ import type { Campaign, UploadStatus } from "../types/campaign";
 import { getRegionBadgeColor, getTypeBadgeColor, getBadgeStyle } from "../utils/badgeColors";
 import { ExternalLinkIcon } from "@radix-ui/react-icons";
 
-interface CampaignItemProps {
+interface NaverSAItemProps {
   campaign: Campaign;
   index: number;
   currentIndex: number;
@@ -19,7 +19,7 @@ interface CampaignItemProps {
   onNavigateToGoogleDrive: (index: number, event: React.MouseEvent) => void;
 }
 
-export function CampaignItem({
+export function NaverSAItem({
   campaign,
   index,
   currentIndex,
@@ -28,7 +28,7 @@ export function CampaignItem({
   isLoading,
   onTriggerWorkflow,
   onNavigateToGoogleDrive,
-}: CampaignItemProps) {
+}: NaverSAItemProps) {
   return (
     <div
       className={`w-full border-2 p-3 shadow-brutal-button rounded-none ${
