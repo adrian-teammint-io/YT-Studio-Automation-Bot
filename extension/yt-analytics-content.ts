@@ -33,6 +33,7 @@ interface DailyStats {
 }
 
 let collectedData: DataPoint[] = [];
+let collectedDataSet = new Set<string>(); // Track unique data points by "date:time" key
 let isCollecting = false;
 let chartSvg: SVGElement | null = null;
 let targetDates: string[] = []; // Format: array of "Nov 11" (month day)
@@ -72,11 +73,11 @@ function convertToOriginalDate(dateStr: string): string {
  */
 async function loadTargetDates(): Promise<string[]> {
   try {
-    console.log("[YT Analytics] Loading target dates from storage...");
+    // console.log("[YT Analytics] Loading target dates from storage...");
     const result = await chrome.storage.local.get([STORAGE_KEYS.DATE_RANGE]);
     const dateRange = result[STORAGE_KEYS.DATE_RANGE];
 
-    console.log("[YT Analytics] Loaded date range:", dateRange);
+    // console.log("[YT Analytics] Loaded date range:", dateRange);
 
     if (dateRange && dateRange.startYear > 0 && dateRange.startMonth > 0 && dateRange.startDay > 0) {
       const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -95,7 +96,7 @@ async function loadTargetDates(): Promise<string[]> {
 
       // Validate dates
       if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-        console.error("[YT Analytics] Invalid date range:", dateRange);
+        // console.error("[YT Analytics] Invalid date range:", dateRange);
         return [];
       }
 
@@ -113,16 +114,16 @@ async function loadTargetDates(): Promise<string[]> {
         currentDate.setDate(currentDate.getDate() + 1);
       }
 
-      console.log("[YT Analytics] User configured date range:",
-        `${monthNames[startDate.getMonth()]} ${startDate.getDate()} - ${monthNames[endDate.getMonth()]} ${endDate.getDate()}`);
-      console.log("[YT Analytics] Target dates for stats (next days at ~12:10 AM):", dates);
+      // console.log("[YT Analytics] User configured date range:",
+      //   `${monthNames[startDate.getMonth()]} ${startDate.getDate()} - ${monthNames[endDate.getMonth()]} ${endDate.getDate()}`);
+      // console.log("[YT Analytics] Target dates for stats (next days at ~12:10 AM):", dates);
       return dates;
     }
 
-    console.warn("[YT Analytics] No valid date range found in storage");
+    // console.warn("[YT Analytics] No valid date range found in storage");
     return [];
   } catch (error) {
-    console.error("[YT Analytics] Failed to load target dates:", error);
+    // console.error("[YT Analytics] Failed to load target dates:", error);
     return [];
   }
 }
@@ -144,6 +145,7 @@ function showToast(message: string, type: "info" | "success" | "error" | "loadin
   toast.textContent = `${icons[type]} ${message}`;
   toast.className = `ytstudio-analytics-toast ytstudio-analytics-toast-${type}`;
   toast.style.display = "block";
+  toast.style.color = "black"; // Ensure text color is always black
 
   // Auto-hide after specified duration for success/error
   if (type === "success" || type === "error") {
@@ -157,7 +159,7 @@ function showToast(message: string, type: "info" | "success" | "error" | "loadin
  * Step 1: Check the "Total" checkbox
  */
 async function checkTotalCheckbox(): Promise<boolean> {
-  console.log("[YT Analytics] Step 1: Checking 'Total' checkbox...");
+  // console.log("[YT Analytics] Step 1: Checking 'Total' checkbox...");
   showToast("총계 체크박스 선택 중...", "loading");
 
   try {
@@ -171,25 +173,25 @@ async function checkTotalCheckbox(): Promise<boolean> {
         const ariaChecked = checkbox.getAttribute('aria-checked');
 
         if (ariaChecked !== 'true') {
-          console.log("[YT Analytics] Found unchecked 'Total' checkbox, clicking...");
+          // console.log("[YT Analytics] Found unchecked 'Total' checkbox, clicking...");
           checkbox.click();
           await new Promise(resolve => setTimeout(resolve, 500));
           showToast("총계 체크박스 선택 완료", "success");
           return true;
         } else {
-          console.log("[YT Analytics] 'Total' checkbox already checked");
+          // console.log("[YT Analytics] 'Total' checkbox already checked");
           showToast("총계 체크박스 이미 선택됨", "info");
           return true;
         }
       }
     }
 
-    console.warn("[YT Analytics] 'Total' checkbox not found");
-    console.warn("[YT Analytics] Available checkboxes:", Array.from(document.querySelectorAll('ytcp-checkbox-lit')).map(el => el.getAttribute('aria-label')));
+    // console.warn("[YT Analytics] 'Total' checkbox not found");
+    // console.warn("[YT Analytics] Available checkboxes:", Array.from(document.querySelectorAll('ytcp-checkbox-lit')).map(el => el.getAttribute('aria-label')));
     showToast("총계 체크박스를 찾을 수 없습니다", "error");
     return false;
   } catch (error) {
-    console.error("[YT Analytics] Error checking 'Total' checkbox:", error);
+    // console.error("[YT Analytics] Error checking 'Total' checkbox:", error);
     showToast("총계 체크박스 선택 실패", "error");
     return false;
   }
@@ -199,7 +201,7 @@ async function checkTotalCheckbox(): Promise<boolean> {
  * Step 2: Check the "YouTube advertising" checkbox
  */
 async function checkAdvertisingCheckbox(): Promise<boolean> {
-  console.log("[YT Analytics] Step 2: Checking 'YouTube advertising' checkbox...");
+  // console.log("[YT Analytics] Step 2: Checking 'YouTube advertising' checkbox...");
   showToast("YouTube 광고 체크박스 선택 중...", "loading");
 
   try {
@@ -213,25 +215,25 @@ async function checkAdvertisingCheckbox(): Promise<boolean> {
         const ariaChecked = checkbox.getAttribute('aria-checked');
 
         if (ariaChecked !== 'true') {
-          console.log("[YT Analytics] Found unchecked 'YouTube advertising' checkbox, clicking...");
+          // console.log("[YT Analytics] Found unchecked 'YouTube advertising' checkbox, clicking...");
           checkbox.click();
           await new Promise(resolve => setTimeout(resolve, 500));
           showToast("YouTube 광고 체크박스 선택 완료", "success");
           return true;
         } else {
-          console.log("[YT Analytics] 'YouTube advertising' checkbox already checked");
+          // console.log("[YT Analytics] 'YouTube advertising' checkbox already checked");
           showToast("YouTube 광고 체크박스 이미 선택됨", "info");
           return true;
         }
       }
     }
 
-    console.warn("[YT Analytics] 'YouTube advertising' checkbox not found");
-    console.warn("[YT Analytics] Available checkboxes:", Array.from(document.querySelectorAll('ytcp-checkbox-lit')).map(el => el.getAttribute('aria-label')));
+    // console.warn("[YT Analytics] 'YouTube advertising' checkbox not found");
+    // console.warn("[YT Analytics] Available checkboxes:", Array.from(document.querySelectorAll('ytcp-checkbox-lit')).map(el => el.getAttribute('aria-label')));
     showToast("YouTube 광고 체크박스를 찾을 수 없습니다", "error");
     return false;
   } catch (error) {
-    console.error("[YT Analytics] Error checking 'YouTube advertising' checkbox:", error);
+    // console.error("[YT Analytics] Error checking 'YouTube advertising' checkbox:", error);
     showToast("YouTube 광고 체크박스 선택 실패", "error");
     return false;
   }
@@ -241,7 +243,7 @@ async function checkAdvertisingCheckbox(): Promise<boolean> {
  * Step 3: Find the line chart SVG element
  */
 function findChartSvg(): SVGElement | null {
-  console.log("[YT Analytics] Step 3: Finding chart SVG element...");
+  // console.log("[YT Analytics] Step 3: Finding chart SVG element...");
 
   // Look for the SVG with the specific structure
   const svgs = document.querySelectorAll('svg.style-scope.yta-line-chart-base');
@@ -250,12 +252,12 @@ function findChartSvg(): SVGElement | null {
     // Check if it has the expected structure (seriesGroups)
     const seriesGroups = svg.querySelector('.seriesGroups');
     if (seriesGroups) {
-      console.log("[YT Analytics] Found chart SVG element");
+      // console.log("[YT Analytics] Found chart SVG element");
       return svg as SVGElement;
     }
   }
 
-  console.warn("[YT Analytics] Chart SVG not found");
+  // console.warn("[YT Analytics] Chart SVG not found");
   return null;
 }
 
@@ -284,7 +286,7 @@ function parsePathData(pathData: string): { x: number; y: number }[] {
  */
 function extractChartData(): DataPoint[] {
   if (!chartSvg) {
-    console.warn("[YT Analytics] Chart SVG not available");
+    // console.warn("[YT Analytics] Chart SVG not available");
     return [];
   }
 
@@ -295,7 +297,7 @@ function extractChartData(): DataPoint[] {
     const seriesGroups = chartSvg.querySelectorAll('.seriesGroups > g');
 
     if (seriesGroups.length < 2) {
-      console.warn("[YT Analytics] Expected 2 series groups, found:", seriesGroups.length);
+      // console.warn("[YT Analytics] Expected 2 series groups, found:", seriesGroups.length);
       return [];
     }
 
@@ -308,7 +310,7 @@ function extractChartData(): DataPoint[] {
     const totalPath = totalSeries.querySelector('.line-series') as SVGPathElement;
 
     if (!advertisingPath || !totalPath) {
-      console.warn("[YT Analytics] Could not find path elements");
+      // console.warn("[YT Analytics] Could not find path elements");
       return [];
     }
 
@@ -316,10 +318,10 @@ function extractChartData(): DataPoint[] {
     const advertisingPoints = parsePathData(advertisingPath.getAttribute('d') || '');
     const totalPoints = parsePathData(totalPath.getAttribute('d') || '');
 
-    console.log("[YT Analytics] Parsed points:", {
-      advertising: advertisingPoints.length,
-      total: totalPoints.length
-    });
+    // console.log("[YT Analytics] Parsed points:", {
+    //   advertising: advertisingPoints.length,
+    //   total: totalPoints.length
+    // });
 
     // Get X-axis labels to map coordinates to dates/times
     const xAxisTicks = chartSvg.querySelectorAll('.x.axis .tick');
@@ -338,7 +340,7 @@ function extractChartData(): DataPoint[] {
       }
     });
 
-    console.log("[YT Analytics] Time labels:", timeLabels);
+    // console.log("[YT Analytics] Time labels:", timeLabels);
 
     // Convert Y coordinates to actual values
     // Y-axis: 0 = 150K, 158 = 0
@@ -373,11 +375,11 @@ function extractChartData(): DataPoint[] {
       });
     }
 
-    console.log("[YT Analytics] Extracted", dataPoints.length, "data points");
+    // console.log("[YT Analytics] Extracted", dataPoints.length, "data points");
     return dataPoints;
 
   } catch (error) {
-    console.error("[YT Analytics] Error extracting chart data:", error);
+    // console.error("[YT Analytics] Error extracting chart data:", error);
     return [];
   }
 }
@@ -387,7 +389,7 @@ function extractChartData(): DataPoint[] {
  * and extract date/time information
  */
 async function collectDataByHovering(): Promise<void> {
-  console.log("[YT Analytics] Step 4: Collecting data by hovering...");
+  // console.log("[YT Analytics] Step 4: Collecting data by hovering...");
   showToast("차트 데이터 수집 중...", "loading");
 
   if (!chartSvg) {
@@ -397,13 +399,14 @@ async function collectDataByHovering(): Promise<void> {
 
   isCollecting = true;
   collectedData = [];
+  collectedDataSet.clear(); // Clear the Set to start fresh
 
   try {
     // Find the mouse capture pane for hover events
     const mousePane = chartSvg.querySelector('.mouseCapturePane') as SVGRectElement;
 
     if (!mousePane) {
-      console.warn("[YT Analytics] Mouse capture pane not found");
+      // console.warn("[YT Analytics] Mouse capture pane not found");
       showToast("차트 인터랙션 영역을 찾을 수 없습니다", "error");
       return;
     }
@@ -413,81 +416,350 @@ async function collectDataByHovering(): Promise<void> {
     const chartHeight = parseFloat(mousePane.getAttribute('height') || '158');
     const rect = mousePane.getBoundingClientRect();
 
-    console.log("[YT Analytics] Chart dimensions:", { chartWidth, chartHeight });
-    console.log("[YT Analytics] Chart position:", rect);
+    // console.log("[YT Analytics] Chart dimensions:", { chartWidth, chartHeight });
+    // console.log("[YT Analytics] Chart position:", rect);
 
-    // Hover at regular intervals across the chart
-    const numPoints = 100; // Sample 100 points across the chart
+    // Scan the line graph once with consistent 100ms delay per point
+    const numScans = 1;
+    const numPoints = 200; // Increased from 100 to 200 for better coverage of 12:10 AM points
     const step = chartWidth / numPoints;
 
-    for (let i = 0; i < numPoints; i++) {
-      const x = i * step;
-      const y = chartHeight / 2; // Hover at middle height
+    // console.log(`[YT Analytics] Starting ${numScans} scans of the line graph...`);
 
-      // Create and dispatch mouse events
-      const clientX = rect.left + x;
-      const clientY = rect.top + y;
+    for (let scan = 0; scan < numScans; scan++) {
+      // console.log(`[YT Analytics] ============================================`);
+      // console.log(`[YT Analytics] Scan ${scan + 1}/${numScans} starting...`);
+      showToast(`차트 스캔 중... (${scan + 1}/${numScans})`, "loading");
 
-      const mouseEnterEvent = new MouseEvent('mouseenter', {
-        bubbles: true,
-        clientX,
-        clientY
-      });
+      // Hover at regular intervals across the chart
+      for (let i = 0; i < numPoints; i++) {
+        const x = i * step;
+        const y = chartHeight / 2; // Hover at middle height
 
-      const mouseMoveEvent = new MouseEvent('mousemove', {
-        bubbles: true,
-        clientX,
-        clientY
-      });
+        // Add slight randomization to x position to capture slightly different points
+        const xOffset = (Math.random() - 0.5) * (step * 0.1); // ±5% of step size
+        const adjustedX = Math.max(0, Math.min(chartWidth, x + xOffset));
 
-      mousePane.dispatchEvent(mouseEnterEvent);
-      mousePane.dispatchEvent(mouseMoveEvent);
+        // Create and dispatch mouse events
+        const clientX = rect.left + adjustedX;
+        const clientY = rect.top + y;
 
-      // Wait for tooltip to appear and become visible (retry up to 5 times)
-      let tooltipFound = false;
-      for (let retry = 0; retry < 5; retry++) {
+        const mouseEnterEvent = new MouseEvent('mouseenter', {
+          bubbles: true,
+          clientX,
+          clientY
+        });
+
+        const mouseMoveEvent = new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX,
+          clientY
+        });
+
+        mousePane.dispatchEvent(mouseEnterEvent);
+        mousePane.dispatchEvent(mouseMoveEvent);
+
+        // Wait for tooltip with consistent 50ms delay per point (faster scanning)
         await new Promise(resolve => setTimeout(resolve, 50));
 
         // Check if tooltip is visible
         const visibleTooltip = findVisibleHovercard();
         if (visibleTooltip) {
-          tooltipFound = true;
-          break;
+          // Extract tooltip data
+          await extractTooltipData(adjustedX);
+        } else {
+          // Only log every 10th failure to reduce console noise
+          // if (i % 10 === 0) {
+          //   console.log(`[YT Analytics] ⚠️ Scan ${scan + 1}: No visible tooltip at x=${adjustedX} after retries`);
+          // }
         }
       }
 
-      if (tooltipFound) {
-        // Extract tooltip data
-        await extractTooltipData(x);
-      } else {
-        // Only log every 10th failure to reduce console noise
-        if (i % 10 === 0) {
-          console.log(`[YT Analytics] ⚠️ No visible tooltip at x=${x} after retries`);
-        }
+      // Dispatch mouse leave event after each scan
+      const mouseLeaveEvent = new MouseEvent('mouseleave', {
+        bubbles: true
+      });
+      mousePane.dispatchEvent(mouseLeaveEvent);
+
+      // console.log(`[YT Analytics] Scan ${scan + 1}/${numScans} complete. Total data points collected: ${collectedData.length}`);
+
+      // Delay between scans to allow UI to settle
+      if (scan < numScans - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
 
-    // Dispatch mouse leave event
-    const mouseLeaveEvent = new MouseEvent('mouseleave', {
-      bubbles: true
-    });
-    mousePane.dispatchEvent(mouseLeaveEvent);
+    // console.log("[YT Analytics] ============================================");
+    // console.log(`[YT Analytics] All ${numScans} scans complete`);
+    // console.log(`[YT Analytics] Total data points collected: ${collectedData.length}`);
+    // console.log("[YT Analytics] ============================================");
 
-    console.log("[YT Analytics] ============================================");
-    console.log("[YT Analytics] Hover collection complete");
-    console.log("[YT Analytics] ============================================");
-    console.log("[YT Analytics] Total data points collected:", collectedData.length);
-    console.log("[YT Analytics] Configured date filter:", targetDates);
-    console.log("[YT Analytics] All collected tooltip data:");
+    // Auto-scan: Check for missing dates and perform additional scans if needed
+    const maxAutoScanAttempts = 5; // Increased from 3 to 5
+    let autoScanAttempt = 0;
+    let missingDates: string[] = [];
+
+    // console.log("[YT Analytics] ============================================");
+    // console.log("[YT Analytics] Starting auto-scan for missing dates...");
+    // console.log("[YT Analytics] Target dates:", targetDates);
+    // console.log("[YT Analytics] ============================================");
+
+    while (autoScanAttempt < maxAutoScanAttempts) {
+      // Group collected data by date
+      const dataByDate = new Map<string, DataPoint[]>();
+      for (const point of collectedData) {
+        if (point.date && !dataByDate.has(point.date)) {
+          dataByDate.set(point.date, []);
+        }
+        if (point.date) {
+          dataByDate.get(point.date)!.push(point);
+        }
+      }
+
+      // Log what dates we have found
+      const foundDates = Array.from(dataByDate.keys());
+      // console.log(`[YT Analytics] Found dates: [${foundDates.join(', ')}]`);
+      // console.log(`[YT Analytics] Expected dates: [${targetDates.join(', ')}]`);
+
+      // Check which target dates are completely missing
+      missingDates = targetDates.filter(date => {
+        const hasDate = dataByDate.has(date);
+        const hasData = hasDate && dataByDate.get(date)!.length > 0;
+        // if (!hasData) {
+        //   console.log(`[YT Analytics] ❌ Missing date: ${date} (hasDate: ${hasDate}, hasData: ${hasData})`);
+        // }
+        return !hasData;
+      });
+
+      if (missingDates.length === 0) {
+        // console.log("[YT Analytics] ✅ All target dates found!");
+        break;
+      }
+
+      autoScanAttempt++;
+      // console.log(`[YT Analytics] ⚠️ Missing ${missingDates.length} date(s): ${missingDates.join(', ')}`);
+      // console.log(`[YT Analytics] Auto-scan attempt ${autoScanAttempt}/${maxAutoScanAttempts}...`);
+      showToast(`누락된 날짜 검색 중... (${autoScanAttempt}/${maxAutoScanAttempts})`, "loading");
+
+      // Perform additional scan with higher density, focusing on finding missing dates
+      // Increase density even more for missing dates
+      const fineGrainedPoints = 400; // Increased from 300 to 400 for better coverage
+      const fineStep = chartWidth / fineGrainedPoints;
+
+      // console.log(`[YT Analytics] Scanning ${fineGrainedPoints} points to find missing dates: ${missingDates.join(', ')}`);
+
+      for (let i = 0; i < fineGrainedPoints; i++) {
+        const x = i * fineStep;
+        const y = chartHeight / 2;
+
+        // Add slight randomization to capture slightly different points
+        const xOffset = (Math.random() - 0.5) * (fineStep * 0.15); // Increased randomization
+        const adjustedX = Math.max(0, Math.min(chartWidth, x + xOffset));
+
+        const clientX = rect.left + adjustedX;
+        const clientY = rect.top + y;
+
+        const mouseMoveEvent = new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX,
+          clientY
+        });
+
+        mousePane.dispatchEvent(mouseMoveEvent);
+
+        // Wait for tooltip with consistent 50ms delay per point (faster scanning)
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const visibleTooltip = findVisibleHovercard();
+        if (visibleTooltip) {
+          const beforeCount = collectedData.length;
+          await extractTooltipData(adjustedX);
+          const afterCount = collectedData.length;
+
+          // Log if we collected new data
+          // if (afterCount > beforeCount) {
+          //   const newPoint = collectedData[collectedData.length - 1];
+          //   if (missingDates.includes(newPoint.date)) {
+          //     console.log(`[YT Analytics] ✅ Found data for missing date: ${newPoint.date} at ${newPoint.time}`);
+          //   }
+          // }
+
+          // Check if we've found all missing dates (check every 50 points to avoid overhead)
+          if (i % 50 === 0) {
+            const currentDataByDate = new Map<string, DataPoint[]>();
+            for (const point of collectedData) {
+              if (point.date && !currentDataByDate.has(point.date)) {
+                currentDataByDate.set(point.date, []);
+              }
+              if (point.date) {
+                currentDataByDate.get(point.date)!.push(point);
+              }
+            }
+
+            const stillMissing = targetDates.filter(date => !currentDataByDate.has(date) || currentDataByDate.get(date)!.length === 0);
+
+            if (stillMissing.length === 0) {
+              // console.log("[YT Analytics] ✅ Found all missing dates, stopping auto-scan early");
+              break;
+            } else if (stillMissing.length < missingDates.length) {
+              // console.log(`[YT Analytics] Progress: Found ${missingDates.length - stillMissing.length} of ${missingDates.length} missing dates. Still missing: ${stillMissing.join(', ')}`);
+              missingDates = stillMissing; // Update missing dates list
+            }
+          }
+        }
+      }
+
+      // console.log(`[YT Analytics] Auto-scan attempt ${autoScanAttempt} complete. Total data points: ${collectedData.length}`);
+
+      // Delay before next auto-scan attempt to allow UI to settle
+      if (autoScanAttempt < maxAutoScanAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    // Final check after auto-scans
+    const finalDataByDate = new Map<string, DataPoint[]>();
+    for (const point of collectedData) {
+      if (point.date && !finalDataByDate.has(point.date)) {
+        finalDataByDate.set(point.date, []);
+      }
+      if (point.date) {
+        finalDataByDate.get(point.date)!.push(point);
+      }
+    }
+
+    const finalMissingDates = targetDates.filter(date => !finalDataByDate.has(date) || finalDataByDate.get(date)!.length === 0);
+    const finalFoundDates = Array.from(finalDataByDate.keys());
+
+    // console.log("[YT Analytics] ============================================");
+    // console.log(`[YT Analytics] Final data collection summary:`);
+    // console.log(`[YT Analytics] Expected dates (${targetDates.length}): [${targetDates.join(', ')}]`);
+    // console.log(`[YT Analytics] Found dates (${finalFoundDates.length}): [${finalFoundDates.join(', ')}]`);
+
+    if (finalMissingDates.length > 0) {
+      // console.error(`[YT Analytics] ❌ WARNING: Still missing ${finalMissingDates.length} date(s) after ${autoScanAttempt} auto-scan attempts: [${finalMissingDates.join(', ')}]`);
+      // console.error(`[YT Analytics] Missing dates detail:`, finalMissingDates.map(date => {
+      //   const hasDate = finalDataByDate.has(date);
+      //   const dataCount = hasDate ? finalDataByDate.get(date)!.length : 0;
+      //   return `${date} (hasDate: ${hasDate}, dataPoints: ${dataCount})`;
+      // }));
+      showToast(`경고: ${finalMissingDates.length}개 날짜 누락됨 (${finalMissingDates.join(', ')})`, "error", 5000);
+    } else {
+      // console.log("[YT Analytics] ✅ All target dates found after auto-scans!");
+      showToast("모든 날짜 데이터 수집 완료", "success", 3000);
+    }
+
+    // console.log(`[YT Analytics] Total data points collected: ${collectedData.length}`);
+    // console.log("[YT Analytics] ============================================");
+
+    // Targeted collection: Specifically search for 12:10 AM data points
+    // Use finalDataByDate that we already created
+    const dataByDate = finalDataByDate;
+
+    // Check which dates are missing 12:10 AM and do targeted search
+    const datesMissing1210AM: string[] = [];
+    for (const [date, points] of dataByDate.entries()) {
+      let has1210AM = false;
+      for (const point of points) {
+        const minutes = timeToMinutes(point.time);
+        if (minutes >= 9 && minutes <= 11) {
+          has1210AM = true;
+          break;
+        }
+      }
+      if (!has1210AM && date) {
+        datesMissing1210AM.push(date);
+      }
+    }
+
+    // If dates are missing 12:10 AM, do a targeted fine-grained search across the entire chart
+    // with higher density to ensure we capture 12:10 AM for all dates
+    if (datesMissing1210AM.length > 0) {
+      // console.log(`[YT Analytics] ⚠️ Missing 12:10 AM data for dates: ${datesMissing1210AM.join(', ')}`);
+      // console.log("[YT Analytics] Performing targeted 12:10 AM search with increased density...");
+      showToast("12:10 AM 데이터 재검색 중...", "loading");
+
+      // Do fine-grained hover across the entire chart with higher density
+      // Use 200 points instead of 100 for better coverage
+      const fineGrainedPoints = 200;
+      const fineStep = chartWidth / fineGrainedPoints;
+
+      for (let i = 0; i < fineGrainedPoints; i++) {
+        const x = i * fineStep;
+        const y = chartHeight / 2;
+
+        const clientX = rect.left + x;
+        const clientY = rect.top + y;
+
+        const mouseMoveEvent = new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX,
+          clientY
+        });
+
+        mousePane.dispatchEvent(mouseMoveEvent);
+
+        // Wait for tooltip with consistent 50ms delay per point (faster scanning)
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const visibleTooltip = findVisibleHovercard();
+        if (visibleTooltip) {
+          await extractTooltipData(x);
+
+          // Check if we've found 12:10 AM for all missing dates
+          const currentDataByDate = new Map<string, DataPoint[]>();
+          for (const point of collectedData) {
+            if (!currentDataByDate.has(point.date)) {
+              currentDataByDate.set(point.date, []);
+            }
+            currentDataByDate.get(point.date)!.push(point);
+          }
+
+          let allFound = true;
+          for (const date of datesMissing1210AM) {
+            const points = currentDataByDate.get(date) || [];
+            let has1210AM = false;
+            for (const point of points) {
+              const minutes = timeToMinutes(point.time);
+              if (minutes >= 9 && minutes <= 11) {
+                has1210AM = true;
+                break;
+              }
+            }
+            if (!has1210AM) {
+              allFound = false;
+              break;
+            }
+          }
+
+          // If we found 12:10 AM for all missing dates, we can stop early
+          if (allFound) {
+            // console.log("[YT Analytics] ✅ Found 12:10 AM for all missing dates, stopping targeted search early");
+            break;
+          }
+        }
+      }
+
+      // console.log(`[YT Analytics] Targeted search complete. Total data points now: ${collectedData.length}`);
+    }
+
+    // console.log("[YT Analytics] ============================================");
+    // console.log("[YT Analytics] Final collection complete");
+    // console.log("[YT Analytics] Total data points collected:", collectedData.length);
+    // console.log("[YT Analytics] Configured date filter:", targetDates);
+    // console.log("[YT Analytics] All collected tooltip data:");
+    // console.table(collectedData);
+    // console.log("[YT Analytics] ============================================");
+
+    console.log(`[YT Analytics] Collected ${collectedData.length} data points for dates: ${targetDates.join(', ')}`);
     console.table(collectedData);
-    console.log("[YT Analytics] ============================================");
 
     showToast(`${collectedData.length}개 데이터 포인트 수집 완료`, "success");
 
-    // Process collected data to select nearest midnight per day
+    // Process collected data to select 12:10 AM for each date
     const dailyStats = processDailyStats(collectedData);
-    console.log("[YT Analytics] Processed daily stats (nearest midnight):");
-    console.table(dailyStats);
+    // console.log("[YT Analytics] Processed daily stats (nearest midnight):");
+    // console.table(dailyStats);
 
     // Store extracted data in array format
     // Convert tooltip date (e.g., "Nov 8") back to original requested date (e.g., "Nov 7")
@@ -521,7 +793,7 @@ async function collectDataByHovering(): Promise<void> {
         extractedData.push(extractedEntry);
       }
 
-      console.log(`[YT Analytics] Stored extracted data for original date ${originalDate} (extracted from ${stat.date} at ${stat.selectedTime}):`, extractedEntry);
+      // console.log(`[YT Analytics] Stored extracted data for original date ${originalDate} (extracted from ${stat.date} at ${stat.selectedTime}):`, extractedEntry);
     }
 
     await chrome.storage.local.set({
@@ -532,7 +804,7 @@ async function collectDataByHovering(): Promise<void> {
     await copyToClipboard(dailyStats);
 
   } catch (error) {
-    console.error("[YT Analytics] Error collecting data:", error);
+    // console.error("[YT Analytics] Error collecting data:", error);
     showToast("데이터 수집 실패", "error");
   } finally {
     isCollecting = false;
@@ -565,18 +837,18 @@ function findVisibleHovercard(): Element | null {
       ));
 
     if (isVisible) {
-      console.log("[YT Analytics] ✅ Found VISIBLE yta-deep-dive-hovercard");
-      console.log("[YT Analytics] Hovercard opacity:", style.opacity);
-      console.log("[YT Analytics] Hovercard visibility:", style.visibility);
-      if (parentStyle) {
-        console.log("[YT Analytics] Parent opacity:", parentStyle.opacity);
-        console.log("[YT Analytics] Parent visibility:", parentStyle.visibility);
-      }
+      // console.log("[YT Analytics] ✅ Found VISIBLE yta-deep-dive-hovercard");
+      // console.log("[YT Analytics] Hovercard opacity:", style.opacity);
+      // console.log("[YT Analytics] Hovercard visibility:", style.visibility);
+      // if (parentStyle) {
+      //   console.log("[YT Analytics] Parent opacity:", parentStyle.opacity);
+      //   console.log("[YT Analytics] Parent visibility:", parentStyle.visibility);
+      // }
       return hovercard;
     } else {
-      console.log("[YT Analytics] ⚠️ Found yta-deep-dive-hovercard but it's HIDDEN");
-      console.log("[YT Analytics] Hovercard opacity:", style.opacity);
-      console.log("[YT Analytics] Hovercard visibility:", style.visibility);
+      // console.log("[YT Analytics] ⚠️ Found yta-deep-dive-hovercard but it's HIDDEN");
+      // console.log("[YT Analytics] Hovercard opacity:", style.opacity);
+      // console.log("[YT Analytics] Hovercard visibility:", style.visibility);
     }
   }
 
@@ -592,10 +864,10 @@ async function extractTooltipData(xPosition: number): Promise<void> {
 
   if (tooltip) {
     // Log tooltip structure
-    console.log("[YT Analytics] 📊 Tooltip found at x:", xPosition);
-    console.log("[YT Analytics] Tooltip element tag:", tooltip.tagName);
-    console.log("[YT Analytics] Tooltip classes:", tooltip.className);
-    console.log("[YT Analytics] Tooltip innerHTML (first 500 chars):", tooltip.innerHTML?.substring(0, 500));
+    // console.log("[YT Analytics] 📊 Tooltip found at x:", xPosition);
+    // console.log("[YT Analytics] Tooltip element tag:", tooltip.tagName);
+    // console.log("[YT Analytics] Tooltip classes:", tooltip.className);
+    // console.log("[YT Analytics] Tooltip innerHTML (first 500 chars):", tooltip.innerHTML?.substring(0, 500));
 
     // Try multiple selector patterns to find value elements
     const selectors = [
@@ -610,35 +882,35 @@ async function extractTooltipData(xPosition: number): Promise<void> {
     for (const selector of selectors) {
       const found = tooltip.querySelectorAll(selector);
       if (found.length > 0) {
-        console.log(`[YT Analytics] Found ${found.length} elements with selector: "${selector}"`);
+        // console.log(`[YT Analytics] Found ${found.length} elements with selector: "${selector}"`);
         valueElements = found;
         break;
       }
     }
 
-    if (valueElements && valueElements.length > 0) {
-      console.log("[YT Analytics] ✅ Value elements found:", valueElements.length);
-      valueElements.forEach((el, idx) => {
-        console.log(`[YT Analytics] Value element ${idx}:`, {
-          textContent: el.textContent,
-          className: el.className,
-          tagName: el.tagName
-        });
-      });
-    } else {
-      console.log("[YT Analytics] ⚠️  No value elements found with any selector");
-    }
+    // if (valueElements && valueElements.length > 0) {
+    //   console.log("[YT Analytics] ✅ Value elements found:", valueElements.length);
+    //   valueElements.forEach((el, idx) => {
+    //     console.log(`[YT Analytics] Value element ${idx}:`, {
+    //       textContent: el.textContent,
+    //       className: el.className,
+    //       tagName: el.tagName
+    //     });
+    //   });
+    // } else {
+    //   console.log("[YT Analytics] ⚠️  No value elements found with any selector");
+    // }
 
     // Extract date, time, and values from tooltip
     const text = tooltip.textContent || '';
 
-    console.log("[YT Analytics] Raw tooltip text:", text);
+    // console.log("[YT Analytics] Raw tooltip text:", text);
 
     // Check if tooltip contains "First"
-    if (text.includes('First') || text.includes('first')) {
-      console.log("[YT Analytics] ⚠️  WARNING: Tooltip contains 'First' keyword!");
-      console.log("[YT Analytics] Full text with 'First':", text);
-    }
+    // if (text.includes('First') || text.includes('first')) {
+    //   console.log("[YT Analytics] ⚠️  WARNING: Tooltip contains 'First' keyword!");
+    //   console.log("[YT Analytics] Full text with 'First':", text);
+    // }
 
     // Try to parse using the actual YouTube tooltip structure
     // Structure: date element, subtitle (with "First X days"), then rows with title/value pairs
@@ -652,35 +924,47 @@ async function extractTooltipData(xPosition: number): Promise<void> {
       const dateTimeText = dateEl.textContent?.trim() || '';
       const subtitleText = subtitleEl?.textContent?.trim() || '';
 
-      console.log("[YT Analytics] Date element:", dateTimeText);
-      console.log("[YT Analytics] Subtitle:", subtitleText);
-      console.log("[YT Analytics] Found", rowEls.length, "traffic source rows");
+      // console.log("[YT Analytics] Date element:", dateTimeText);
+      // console.log("[YT Analytics] Subtitle:", subtitleText);
+      // console.log("[YT Analytics] Found", rowEls.length, "traffic source rows");
 
-      if (subtitleText.includes('First') || subtitleText.includes('first')) {
-        console.log("[YT Analytics] ⚠️  Subtitle contains 'First':", subtitleText);
-      }
+      // if (subtitleText.includes('First') || subtitleText.includes('first')) {
+      //   console.log("[YT Analytics] ⚠️  Subtitle contains 'First':", subtitleText);
+      // }
 
       // Parse date from "Sat, Nov 8, 1:10 AM" → "Nov 8"
       const dateParts = dateTimeText.match(/([A-Z][a-z]{2}),?\s+([A-Z][a-z]{2})\s+(\d{1,2}),?\s+(\d{1,2}:\d{2}\s+[AP]M)/i);
       if (!dateParts) {
-        console.log("[YT Analytics] ⚠️  Could not parse date from:", dateTimeText);
+        // console.log("[YT Analytics] ⚠️  Could not parse date from:", dateTimeText);
         return;
       }
 
       const month = dateParts[2]; // "Nov"
       const day = dateParts[3];   // "8"
       const time = dateParts[4];  // "1:10 AM"
-      const date = `${month} ${day}`; // "Nov 8"
-
-      console.log("[YT Analytics] Parsed date:", date);
-      console.log("[YT Analytics] Parsed time:", time);
-      console.log("[YT Analytics] Target dates:", targetDates);
+      const date = `${month} ${day}`.trim(); // "Nov 8" (trimmed)
 
       // Filter: only collect data for dates in the target dates array
-      if (targetDates.length > 0 && !targetDates.includes(date)) {
-        console.log("[YT Analytics] ❌ Skipped - date not in target range");
+      // Use normalized comparison (trim and compare)
+      const normalizedDate = date.trim();
+      const isInTargetDates = targetDates.length === 0 || targetDates.some(targetDate => targetDate.trim() === normalizedDate);
+
+      if (!isInTargetDates) {
+        // Skip dates not in target range
         return;
       }
+
+      // CRITICAL: Only collect data when time is exactly 12:10 AM (within 1 minute tolerance: 12:09 AM - 12:11 AM)
+      const minutesFromMidnight = timeToMinutes(time);
+      const is1210AM = minutesFromMidnight >= 9 && minutesFromMidnight <= 11;
+
+      if (!is1210AM) {
+        // Skip all times that are not 12:10 AM - only collect 12:10 AM data
+        return;
+      }
+
+      // Log when we successfully collect 12:10 AM data
+      console.log(`found ${normalizedDate.toLowerCase()} at ${time}`);
 
       // Parse values - remove commas and convert to number
       const parseValue = (str: string): number => {
@@ -703,7 +987,7 @@ async function extractTooltipData(xPosition: number): Promise<void> {
 
           trafficSources.push({ title, value });
 
-          console.log(`[YT Analytics] Row ${index}: ${title} = ${value}`);
+          // console.log(`[YT Analytics] Row ${index}: ${title} = ${value}`);
 
           // Capture specific values for backward compatibility
           if (index === 0) {
@@ -715,35 +999,81 @@ async function extractTooltipData(xPosition: number): Promise<void> {
         }
       });
 
-      console.log("[YT Analytics] Extracted traffic sources:", trafficSources);
+      // console.log("[YT Analytics] Extracted traffic sources:", trafficSources);
 
-      const dataPoint = {
-        date: date,
-        time: time,
-        timestamp: parseDateTime(dateTimeText),
-        totalViews,
-        advertisingViews,
-        trafficSources,
-        xPosition,
-        yPosition: 0
-      };
+      // Create a unique key for this data point using date and time
+      const dataPointKey = `${date}:${time}`;
+      
+      // Only add if not already collected (deduplicate using Set)
+      if (!collectedDataSet.has(dataPointKey)) {
+        const dataPoint = {
+          date: date,
+          time: time,
+          timestamp: parseDateTime(dateTimeText),
+          totalViews,
+          advertisingViews,
+          trafficSources,
+          xPosition,
+          yPosition: 0
+        };
 
-      collectedData.push(dataPoint);
-      console.log("[YT Analytics] ✅ Data point collected:", dataPoint);
+        collectedData.push(dataPoint);
+        collectedDataSet.add(dataPointKey); // Track this data point
+        // console.log("[YT Analytics] ✅ Data point collected:", dataPoint);
+      } else {
+        // console.log(`[YT Analytics] ⚠️ Duplicate data point skipped: ${dataPointKey}`);
+      }
+
+      // Save immediately to ytstudio_extracted_data storage
+      try {
+        const result = await chrome.storage.local.get([STORAGE_KEYS.EXTRACTED_DATA]);
+        const extractedData: Array<{
+          date: string;
+          normal_total_views: number;
+          normal_ads_views: number;
+          ads_true_views?: number;
+        }> = result[STORAGE_KEYS.EXTRACTED_DATA] || [];
+
+        // Convert tooltip date (e.g., "Nov 8") back to original requested date (e.g., "Nov 7")
+        const originalDate = convertToOriginalDate(date);
+
+        const extractedEntry = {
+          date: originalDate, // Store as original requested date (e.g., "Nov 7")
+          normal_total_views: totalViews,
+          normal_ads_views: advertisingViews,
+          // ads_true_views will be added later
+        };
+
+        // Check if entry for this original date already exists
+        const existingIndex = extractedData.findIndex(entry => entry.date === originalDate);
+        if (existingIndex >= 0) {
+          // Update existing entry
+          extractedData[existingIndex] = extractedEntry;
+        } else {
+          // Add new entry
+          extractedData.push(extractedEntry);
+        }
+
+        await chrome.storage.local.set({
+          [STORAGE_KEYS.EXTRACTED_DATA]: extractedData
+        });
+      } catch (error) {
+        // console.error("[YT Analytics] Failed to save extracted data immediately:", error);
+      }
     } else {
-      console.log("[YT Analytics] ⚠️  Could not find required elements in yta-deep-dive-hovercard");
-      console.log("[YT Analytics] Date element found:", !!dateEl);
-      console.log("[YT Analytics] Row elements count:", rowEls.length);
-      console.log("[YT Analytics] Expected at least 2 rows with .row.style-scope.yta-deep-dive-hovercard");
-      console.log("[YT Analytics] Tooltip HTML structure:", tooltip.innerHTML?.substring(0, 1000));
+      // console.log("[YT Analytics] ⚠️  Could not find required elements in yta-deep-dive-hovercard");
+      // console.log("[YT Analytics] Date element found:", !!dateEl);
+      // console.log("[YT Analytics] Row elements count:", rowEls.length);
+      // console.log("[YT Analytics] Expected at least 2 rows with .row.style-scope.yta-deep-dive-hovercard");
+      // console.log("[YT Analytics] Tooltip HTML structure:", tooltip.innerHTML?.substring(0, 1000));
     }
   } else {
     // Only log every 20th miss to avoid console spam
-    if (Math.random() < 0.05) {
-      console.log("[YT Analytics] ⚠️ No visible yta-deep-dive-hovercard found at x:", xPosition);
-      const allHovercards = document.querySelectorAll('yta-deep-dive-hovercard');
-      console.log("[YT Analytics] Total hovercards in DOM:", allHovercards.length);
-    }
+    // if (Math.random() < 0.05) {
+    //   console.log("[YT Analytics] ⚠️ No visible yta-deep-dive-hovercard found at x:", xPosition);
+    //   const allHovercards = document.querySelectorAll('yta-deep-dive-hovercard');
+    //   console.log("[YT Analytics] Total hovercards in DOM:", allHovercards.length);
+    // }
   }
 }
 
@@ -762,11 +1092,31 @@ function parseDateTime(dateTimeStr: string): number {
 }
 
 /**
+ * Helper function to convert time string to minutes from midnight
+ */
+function timeToMinutes(timeStr: string): number {
+  const time = timeStr.toLowerCase();
+  const hourMatch = time.match(/(\d+):(\d+)\s*(am|pm)/i);
+
+  if (!hourMatch) return Infinity; // Invalid time, sort to end
+
+  let hour = parseInt(hourMatch[1]);
+  const minute = parseInt(hourMatch[2]);
+  const period = hourMatch[3].toLowerCase();
+
+  // Convert to 24-hour format
+  if (period === 'am' && hour === 12) hour = 0;
+  if (period === 'pm' && hour !== 12) hour += 12;
+
+  return hour * 60 + minute;
+}
+
+/**
  * Process collected data to select nearest 12:10 AM point for EACH date
  */
 function processDailyStats(data: DataPoint[]): DailyStats[] {
   if (data.length === 0) {
-    console.warn("[YT Analytics] No data collected for target dates:", targetDates);
+    // console.warn("[YT Analytics] No data collected for target dates:", targetDates);
     return [];
   }
 
@@ -779,9 +1129,9 @@ function processDailyStats(data: DataPoint[]): DailyStats[] {
     dataByDate.get(point.date)!.push(point);
   }
 
-  console.log("[YT Analytics] Collected data for", dataByDate.size, "dates:", Array.from(dataByDate.keys()));
+  // console.log("[YT Analytics] Collected data for", dataByDate.size, "dates:", Array.from(dataByDate.keys()));
 
-  // Find the point closest to 12:10 AM (00:10) for each date
+  // Find the point at exactly 12:10 AM (00:10) for each date
   const targetHour = 0;  // 12 AM in 24-hour format
   const targetMinute = 10;
   const targetMinutesFromMidnight = targetHour * 60 + targetMinute; // 10 minutes
@@ -790,84 +1140,54 @@ function processDailyStats(data: DataPoint[]): DailyStats[] {
 
   // Process each date
   for (const [date, points] of dataByDate.entries()) {
-    console.log(`[YT Analytics] Processing ${points.length} data points for date: ${date}`);
-    console.table(points.map(p => ({ time: p.time, totalViews: p.totalViews })));
+    // console.log(`[YT Analytics] Processing ${points.length} data points for date: ${date}`);
+    // console.table(points.map(p => ({ time: p.time, totalViews: p.totalViews })));
 
-    let closestPoint = points[0];
-    let minTimeDiff = Infinity;
-    let exactMatchFound = false;
+    // Sort points by time (ascending) so 12:10 AM (00:10) will be first
+    const sortedPoints = [...points].sort((a, b) => {
+      const minutesA = timeToMinutes(a.time);
+      const minutesB = timeToMinutes(b.time);
+      return minutesA - minutesB;
+    });
 
-    // First pass: Look for exact 12:10 AM match (within 5 minute tolerance)
-    for (const point of points) {
-      const time = point.time.toLowerCase();
-      const hourMatch = time.match(/(\d+):(\d+)\s*(am|pm)/i);
+    // console.log(`[YT Analytics] Sorted points by time:`, sortedPoints.map(p => p.time));
 
-      if (hourMatch) {
-        let hour = parseInt(hourMatch[1]);
-        const minute = parseInt(hourMatch[2]);
-        const period = hourMatch[3].toLowerCase();
+    let selectedPoint: DataPoint | null = null;
 
-        // Convert to 24-hour format
-        if (period === 'am' && hour === 12) hour = 0;
-        if (period === 'pm' && hour !== 12) hour += 12;
+    // Look for exact 12:10 AM match (within 1 minute tolerance: 12:09 AM - 12:11 AM)
+    for (const point of sortedPoints) {
+      const minutesFromMidnight = timeToMinutes(point.time);
 
-        // Calculate minutes from midnight
-        const minutesFromMidnight = hour * 60 + minute;
-
-        // Check if it's exactly 12:10 AM (within 5 minute tolerance: 12:05 AM - 12:15 AM)
-        if (hour === 0 && minutesFromMidnight >= 5 && minutesFromMidnight <= 15) {
-          exactMatchFound = true;
-          closestPoint = point;
-          minTimeDiff = Math.abs(minutesFromMidnight - targetMinutesFromMidnight);
-          console.log(`[YT Analytics] Found exact 12:10 AM match for ${date}: ${point.time}`);
-          break; // Found exact match, stop searching
-        }
+      // Check if it's exactly 12:10 AM (within 1 minute tolerance: 12:09 AM - 12:11 AM)
+      // This ensures we only select times very close to 12:10 AM
+      if (minutesFromMidnight >= 9 && minutesFromMidnight <= 11) {
+        selectedPoint = point;
+        // Data was already logged during collection, no need to log again
+        break; // Found match, stop searching
       }
     }
 
-    // Second pass: If no exact match, find closest to 12:10 AM
-    if (!exactMatchFound) {
-      console.log(`[YT Analytics] No exact 12:10 AM match for ${date}, finding closest...`);
-      for (const point of points) {
-        const time = point.time.toLowerCase();
-        const hourMatch = time.match(/(\d+):(\d+)\s*(am|pm)/i);
-
-        if (hourMatch) {
-          let hour = parseInt(hourMatch[1]);
-          const minute = parseInt(hourMatch[2]);
-          const period = hourMatch[3].toLowerCase();
-
-          // Convert to 24-hour format
-          if (period === 'am' && hour === 12) hour = 0;
-          if (period === 'pm' && hour !== 12) hour += 12;
-
-          // Calculate minutes from midnight
-          const minutesFromMidnight = hour * 60 + minute;
-
-          // Calculate absolute difference from 12:10 AM
-          const timeDiff = Math.abs(minutesFromMidnight - targetMinutesFromMidnight);
-
-          if (timeDiff < minTimeDiff) {
-            minTimeDiff = timeDiff;
-            closestPoint = point;
-          }
-        }
-      }
+    // STRICT: Only accept 12:10 AM - skip date if not found
+    if (!selectedPoint) {
+      // console.error(`[YT Analytics] ❌ ERROR: No 12:10 AM data found for ${date}. Available times:`, sortedPoints.map(p => p.time));
+      // console.error(`[YT Analytics] ⚠️ Skipping ${date} - will not be included in results. Data collection may need to retry or increase sampling.`);
+      // Skip this date - don't add to dailyStats
+      continue;
     }
 
     dailyStats.push({
-      date: closestPoint.date,
-      totalViews: closestPoint.totalViews,
-      advertisingViews: closestPoint.advertisingViews,
-      trafficSources: closestPoint.trafficSources,
-      selectedTime: closestPoint.time
+      date: selectedPoint.date,
+      totalViews: selectedPoint.totalViews,
+      advertisingViews: selectedPoint.advertisingViews,
+      trafficSources: selectedPoint.trafficSources,
+      selectedTime: selectedPoint.time
     });
 
-    console.log(`[YT Analytics] Selected time for ${date}:`, closestPoint.time, "(diff:", minTimeDiff, "minutes)");
-    console.log(`[YT Analytics] Traffic sources:`, closestPoint.trafficSources);
+    // console.log(`[YT Analytics] Selected time for ${date}:`, selectedPoint.time);
+    // console.log(`[YT Analytics] Traffic sources:`, selectedPoint.trafficSources);
   }
 
-  console.log("[YT Analytics] Total daily stats processed:", dailyStats.length);
+  // console.log("[YT Analytics] Total daily stats processed:", dailyStats.length);
   return dailyStats;
 }
 
@@ -907,30 +1227,30 @@ async function copyToClipboard(dailyStats: DailyStats[]): Promise<void> {
     const tsv = [header, ...rows].join('\n');
 
     // Log what's being copied within the configured dates
-    console.log("[YT Analytics] ============================================");
-    console.log("[YT Analytics] Copying comprehensive analytics data");
-    console.log("[YT Analytics] ============================================");
-    console.log("[YT Analytics] Configured date range:", targetDates.length > 0 ? `${targetDates[0]} to ${targetDates[targetDates.length - 1]}` : "Not set");
-    console.log("[YT Analytics] Number of dates:", targetDates.length);
-    console.log("[YT Analytics] Number of data rows copied:", dailyStats.length);
-    console.log("[YT Analytics] Traffic source columns:", sourceColumns);
-    console.log("[YT Analytics] Raw TSV format:");
-    console.log(tsv);
-    console.log("[YT Analytics] Parsed data structure:");
-    console.table(dailyStats);
-    console.log("[YT Analytics] Traffic sources detail:");
-    dailyStats.forEach(stat => {
-      console.table(stat.trafficSources);
-    });
-    console.log("[YT Analytics] ============================================");
+    // console.log("[YT Analytics] ============================================");
+    // console.log("[YT Analytics] Copying comprehensive analytics data");
+    // console.log("[YT Analytics] ============================================");
+    // console.log("[YT Analytics] Configured date range:", targetDates.length > 0 ? `${targetDates[0]} to ${targetDates[targetDates.length - 1]}` : "Not set");
+    // console.log("[YT Analytics] Number of dates:", targetDates.length);
+    // console.log("[YT Analytics] Number of data rows copied:", dailyStats.length);
+    // console.log("[YT Analytics] Traffic source columns:", sourceColumns);
+    // console.log("[YT Analytics] Raw TSV format:");
+    // console.log(tsv);
+    // console.log("[YT Analytics] Parsed data structure:");
+    // console.table(dailyStats);
+    // console.log("[YT Analytics] Traffic sources detail:");
+    // dailyStats.forEach(stat => {
+    //   console.table(stat.trafficSources);
+    // });
+    // console.log("[YT Analytics] ============================================");
 
     // Copy to clipboard
     await navigator.clipboard.writeText(tsv);
 
-    console.log("[YT Analytics] Data copied to clipboard");
+    // console.log("[YT Analytics] Data copied to clipboard");
     showToast("데이터가 클립보드에 복사되었습니다 (모든 트래픽 소스 포함)", "success", 5000);
   } catch (error) {
-    console.error("[YT Analytics] Failed to copy to clipboard:", error);
+    // console.error("[YT Analytics] Failed to copy to clipboard:", error);
     showToast("클립보드 복사 실패", "error");
   }
 }
@@ -939,9 +1259,9 @@ async function copyToClipboard(dailyStats: DailyStats[]): Promise<void> {
  * Main workflow execution
  */
 async function executeWorkflow(): Promise<void> {
-  console.log("[YT Analytics] ========================================");
-  console.log("[YT Analytics] Starting YT Studio Analytics automation");
-  console.log("[YT Analytics] ========================================");
+  // console.log("[YT Analytics] ========================================");
+  // console.log("[YT Analytics] Starting YT Studio Analytics automation");
+  // console.log("[YT Analytics] ========================================");
 
   try {
     // Step 0: Load target dates from storage
@@ -952,7 +1272,7 @@ async function executeWorkflow(): Promise<void> {
       throw new Error("Target dates not configured. Please set date range in the popup first.");
     }
 
-    console.log("[YT Analytics] Target dates:", targetDates);
+    // console.log("[YT Analytics] Target dates:", targetDates);
     const dateRangeMsg = targetDates.length === 1
       ? `${targetDates[0]}`
       : `${targetDates[0]} - ${targetDates[targetDates.length - 1]}`;
@@ -977,12 +1297,12 @@ async function executeWorkflow(): Promise<void> {
     // Step 4: Collect data by hovering
     await collectDataByHovering();
 
-    console.log("[YT Analytics] ========================================");
-    console.log("[YT Analytics] Workflow completed successfully!");
-    console.log("[YT Analytics] ========================================");
+    // console.log("[YT Analytics] ========================================");
+    // console.log("[YT Analytics] Workflow completed successfully!");
+    // console.log("[YT Analytics] ========================================");
 
   } catch (error) {
-    console.error("[YT Analytics] Workflow failed:", error);
+    // console.error("[YT Analytics] Workflow failed:", error);
     showToast(`오류: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
   }
 }
@@ -1056,7 +1376,7 @@ async function updateDateStatusDisplay(showLoading: boolean = false): Promise<vo
       dateStatus.style.color = '#991b1b';
     }
   } catch (error) {
-    console.error("[YT Analytics] Failed to load date range for display:", error);
+    // console.error("[YT Analytics] Failed to load date range for display:", error);
     dateStatus.textContent = `⚠️ Set date in popup`;
     dateStatus.style.background = '#fee2e2';
     dateStatus.style.color = '#991b1b';
@@ -1074,10 +1394,11 @@ async function injectUI(): Promise<void> {
     toast.className = "ytstudio-analytics-toast";
     toast.style.cssText = `
       position: fixed;
-      bottom: 100px;
-      right: 32px;
-      z-index: 10000;
+      bottom: 32px;
+      left: 32px;
+      z-index: 10001;
       background: white;
+      color: black;
       border: 2px solid black;
       box-shadow: 0.2rem 0.2rem 0 0 black;
       padding: 12px 20px;
@@ -1170,11 +1491,11 @@ async function initialize(): Promise<void> {
   // Check if we're on the YouTube Studio analytics page
   if (!window.location.href.includes("studio.youtube.com/video") ||
       !window.location.href.includes("analytics")) {
-    console.log("[YT Analytics] Not on YouTube Studio analytics page");
+    // console.log("[YT Analytics] Not on YouTube Studio analytics page");
     return;
   }
 
-  console.log("[YT Analytics] Initializing on YouTube Studio analytics page");
+  // console.log("[YT Analytics] Initializing on YouTube Studio analytics page");
 
   // Wait for page to fully load
   await new Promise(resolve => setTimeout(resolve, 3000));
@@ -1182,24 +1503,26 @@ async function initialize(): Promise<void> {
   // Inject UI (now async to load date)
   await injectUI();
 
-  console.log("[YT Analytics] Ready! Click 'Start Data Collection' button to begin.");
+  // console.log("[YT Analytics] Ready! Click 'Start Data Collection' button to begin.");
 
   // Show initial date status
   const currentTargetDates = await loadTargetDates();
-  if (currentTargetDates.length > 0) {
-    const dateRangeMsg = currentTargetDates.length === 1
-      ? currentTargetDates[0]
-      : `${currentTargetDates[0]} - ${currentTargetDates[currentTargetDates.length - 1]}`;
-    console.log("[YT Analytics] ✓ Target dates configured:", dateRangeMsg);
-  } else {
-    console.warn("[YT Analytics] ⚠️  No target dates configured. Please set date range in the extension popup.");
-  }
+  // if (currentTargetDates.length > 0) {
+  //   const dateRangeMsg = currentTargetDates.length === 1
+  //     ? currentTargetDates[0]
+  //     : `${currentTargetDates[0]} - ${currentTargetDates[currentTargetDates.length - 1]}`;
+  //   console.log("[YT Analytics] ✓ Target dates configured:", dateRangeMsg);
+  // } else {
+  //   console.warn("[YT Analytics] ⚠️  No target dates configured. Please set date range in the extension popup.");
+  // }
 
   // Listen for date range changes in storage and update display instantly
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === "local" && changes[STORAGE_KEYS.DATE_RANGE]) {
-      console.log("[YT Analytics] Date range changed, updating display...");
+      // console.log("[YT Analytics] Date range changed, updating display...");
       updateDateStatusDisplay(true); // Show loading indicator during sync
+      // Clear extracted data when date range changes
+      chrome.storage.local.set({ [STORAGE_KEYS.EXTRACTED_DATA]: [] });
     }
   });
 }

@@ -40,6 +40,7 @@ function showToast(message: string, type: "info" | "success" | "error" | "loadin
   toast.textContent = `${icons[type]} ${message}`;
   toast.className = `ytstudio-toast ytstudio-toast-${type}`;
   toast.style.display = "block";
+  toast.style.color = "black"; // Ensure text color is black
 
   // Auto-hide after specified duration for success/error
   if (type === "success" || type === "error") {
@@ -928,8 +929,8 @@ function injectUI(): void {
     toast.className = "ytstudio-toast";
     toast.style.cssText = `
       position: fixed;
-      bottom: 100px;
-      right: 32px;
+      bottom: 32px;
+      left: 32px;
       z-index: 10001;
       background: white;
       border: 2px solid black;
@@ -1116,7 +1117,8 @@ async function initialize(): Promise<void> {
         chrome.storage.local.set({
           [STORAGE_KEYS.DATE_QUEUE]: [],
           [STORAGE_KEYS.CURRENT_DATE_INDEX]: 0,
-          [STORAGE_KEYS.COMPLETED_DATES]: []
+          [STORAGE_KEYS.COMPLETED_DATES]: [],
+          [STORAGE_KEYS.EXTRACTED_DATA]: [] // Clear extracted data when date range changes
         });
       }
     }

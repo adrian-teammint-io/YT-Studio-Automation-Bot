@@ -160,7 +160,11 @@ export default function URLReplacerPopup() {
         localStorage.setItem(STORAGE_KEYS.DATE_RANGE, JSON.stringify(dateRange));
 
         if (typeof chrome !== "undefined" && chrome.storage) {
-          chrome.storage.local.set({ [STORAGE_KEYS.DATE_RANGE]: dateRange });
+          // Clear extracted data when starting with a new date configuration
+          chrome.storage.local.set({
+            [STORAGE_KEYS.DATE_RANGE]: dateRange,
+            [STORAGE_KEYS.EXTRACTED_DATA]: []
+          });
         }
       }
     }, 500);
