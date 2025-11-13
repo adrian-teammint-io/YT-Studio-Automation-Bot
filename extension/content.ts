@@ -930,7 +930,7 @@ function injectUI(): void {
       position: fixed;
       bottom: 100px;
       right: 32px;
-      z-index: 10000;
+      z-index: 10001;
       background: white;
       border: 2px solid black;
       box-shadow: 0.2rem 0.2rem 0 0 black;
@@ -940,6 +940,7 @@ function injectUI(): void {
       display: none;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       min-width: 200px;
+      color: black;
     `;
     document.body.appendChild(toast);
   }

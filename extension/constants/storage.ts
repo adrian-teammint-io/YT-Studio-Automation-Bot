@@ -8,6 +8,7 @@ export const STORAGE_KEYS = {
   CAMPAIGN_REGIONS: "ytstudio_campaign_regions",
   CAMPAIGN_TYPES: "ytstudio_campaign_types",
   DATE_RANGE: "ytstudio_date_range",
+  EXTRACTED_DATA: "ytstudio_extracted_data",
   WORKFLOW_PAUSED: "ytstudio_workflow_paused",
   BUTTONS_VISIBLE: "ytstudio_buttons_visible",
   SHEET_ID: "ytstudio_sheet_id",

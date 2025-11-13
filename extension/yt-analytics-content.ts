@@ -38,6 +38,28 @@ let chartSvg: SVGElement | null = null;
 let targetDates: string[] = []; // Format: array of "Nov 11" (month day)
 
 /**
+ * Convert date string like "Nov 8" back to previous day "Nov 7"
+ * This is used to store the original requested date when extracting from next day's 12:10 AM
+ */
+function convertToOriginalDate(dateStr: string): string {
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const parts = dateStr.match(/([A-Z][a-z]{2})\s+(\d{1,2})/);
+  if (!parts) return dateStr;
+
+  const monthName = parts[1];
+  const day = parseInt(parts[2]);
+  const monthIndex = monthNames.indexOf(monthName);
+
+  if (monthIndex === -1) return dateStr;
+
+  const year = new Date().getFullYear();
+  const date = new Date(year, monthIndex, day);
+  date.setDate(date.getDate() - 1); // Subtract 1 day
+
+  return `${monthNames[date.getMonth()]} ${date.getDate()}`;
+}
+
+/**
  * Load target dates from chrome storage (uses DATE_RANGE from popup)
  * Returns array of dates (next day after each configured date) for stats collection
  *
@@ -467,6 +489,45 @@ async function collectDataByHovering(): Promise<void> {
     console.log("[YT Analytics] Processed daily stats (nearest midnight):");
     console.table(dailyStats);
 
+    // Store extracted data in array format
+    // Convert tooltip date (e.g., "Nov 8") back to original requested date (e.g., "Nov 7")
+    // processDailyStats already selected the closest point to 12:10 AM for each date
+    const result = await chrome.storage.local.get([STORAGE_KEYS.EXTRACTED_DATA]);
+    const extractedData: Array<{
+      date: string;
+      normal_total_views: number;
+      normal_ads_views: number;
+      ads_true_views?: number;
+    }> = result[STORAGE_KEYS.EXTRACTED_DATA] || [];
+
+    for (const stat of dailyStats) {
+      // Convert tooltip date (e.g., "Nov 8") back to original requested date (e.g., "Nov 7")
+      const originalDate = convertToOriginalDate(stat.date);
+
+      const extractedEntry = {
+        date: originalDate, // Store as original requested date (e.g., "Nov 7")
+        normal_total_views: stat.totalViews,
+        normal_ads_views: stat.advertisingViews,
+        // ads_true_views will be added later
+      };
+
+      // Check if entry for this original date already exists
+      const existingIndex = extractedData.findIndex(entry => entry.date === originalDate);
+      if (existingIndex >= 0) {
+        // Update existing entry
+        extractedData[existingIndex] = extractedEntry;
+      } else {
+        // Add new entry
+        extractedData.push(extractedEntry);
+      }
+
+      console.log(`[YT Analytics] Stored extracted data for original date ${originalDate} (extracted from ${stat.date} at ${stat.selectedTime}):`, extractedEntry);
+    }
+
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.EXTRACTED_DATA]: extractedData
+    });
+
     // Copy to clipboard
     await copyToClipboard(dailyStats);
 
@@ -734,9 +795,10 @@ function processDailyStats(data: DataPoint[]): DailyStats[] {
 
     let closestPoint = points[0];
     let minTimeDiff = Infinity;
+    let exactMatchFound = false;
 
+    // First pass: Look for exact 12:10 AM match (within 5 minute tolerance)
     for (const point of points) {
-      // Calculate time difference from 12:10 AM (00:10)
       const time = point.time.toLowerCase();
       const hourMatch = time.match(/(\d+):(\d+)\s*(am|pm)/i);
 
@@ -752,12 +814,43 @@ function processDailyStats(data: DataPoint[]): DailyStats[] {
         // Calculate minutes from midnight
         const minutesFromMidnight = hour * 60 + minute;
 
-        // Calculate absolute difference from 12:10 AM
-        const timeDiff = Math.abs(minutesFromMidnight - targetMinutesFromMidnight);
-
-        if (timeDiff < minTimeDiff) {
-          minTimeDiff = timeDiff;
+        // Check if it's exactly 12:10 AM (within 5 minute tolerance: 12:05 AM - 12:15 AM)
+        if (hour === 0 && minutesFromMidnight >= 5 && minutesFromMidnight <= 15) {
+          exactMatchFound = true;
           closestPoint = point;
+          minTimeDiff = Math.abs(minutesFromMidnight - targetMinutesFromMidnight);
+          console.log(`[YT Analytics] Found exact 12:10 AM match for ${date}: ${point.time}`);
+          break; // Found exact match, stop searching
+        }
+      }
+    }
+
+    // Second pass: If no exact match, find closest to 12:10 AM
+    if (!exactMatchFound) {
+      console.log(`[YT Analytics] No exact 12:10 AM match for ${date}, finding closest...`);
+      for (const point of points) {
+        const time = point.time.toLowerCase();
+        const hourMatch = time.match(/(\d+):(\d+)\s*(am|pm)/i);
+
+        if (hourMatch) {
+          let hour = parseInt(hourMatch[1]);
+          const minute = parseInt(hourMatch[2]);
+          const period = hourMatch[3].toLowerCase();
+
+          // Convert to 24-hour format
+          if (period === 'am' && hour === 12) hour = 0;
+          if (period === 'pm' && hour !== 12) hour += 12;
+
+          // Calculate minutes from midnight
+          const minutesFromMidnight = hour * 60 + minute;
+
+          // Calculate absolute difference from 12:10 AM
+          const timeDiff = Math.abs(minutesFromMidnight - targetMinutesFromMidnight);
+
+          if (timeDiff < minTimeDiff) {
+            minTimeDiff = timeDiff;
+            closestPoint = point;
+          }
         }
       }
     }
