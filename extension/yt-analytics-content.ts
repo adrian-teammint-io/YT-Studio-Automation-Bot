@@ -35,34 +35,73 @@ interface DailyStats {
 let collectedData: DataPoint[] = [];
 let isCollecting = false;
 let chartSvg: SVGElement | null = null;
-let targetDate: string = ""; // Format: "YYYY-MM-DD" or "Nov 11" (month day)
+let targetDates: string[] = []; // Format: array of "Nov 11" (month day)
 
 /**
- * Load target date from chrome storage (uses start date from DATE_RANGE)
+ * Load target dates from chrome storage (uses DATE_RANGE from popup)
+ * Returns array of dates (next day after each configured date) for stats collection
+ *
+ * INTERNAL LOGIC (not shown to users):
+ * - If user configures "Nov 10 - Nov 13", this returns ["Nov 11", "Nov 12", "Nov 14"]
+ * - Stats are collected at time closest to 12:10 AM on each next day
+ * - This is because YouTube shows stats at the start of the next day
+ *
+ * e.g., user sets "Nov 10 - Nov 12" → function returns ["Nov 11", "Nov 12", "Nov 13"]
  */
-async function loadTargetDate(): Promise<string> {
+async function loadTargetDates(): Promise<string[]> {
   try {
-    console.log("[YT Analytics] Loading target date from storage...");
+    console.log("[YT Analytics] Loading target dates from storage...");
     const result = await chrome.storage.local.get([STORAGE_KEYS.DATE_RANGE]);
     const dateRange = result[STORAGE_KEYS.DATE_RANGE];
 
     console.log("[YT Analytics] Loaded date range:", dateRange);
 
     if (dateRange && dateRange.startYear > 0 && dateRange.startMonth > 0 && dateRange.startDay > 0) {
-      // Use start date from date range
-      // Convert to "Nov 11" format for comparison
-      const date = new Date(dateRange.startYear, dateRange.startMonth - 1, dateRange.startDay);
       const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-      const formattedDate = `${monthNames[date.getMonth()]} ${date.getDate()}`;
-      console.log("[YT Analytics] Formatted target date:", formattedDate);
-      return formattedDate;
+      const dates: string[] = [];
+
+      // Create start date
+      const startDate = new Date(dateRange.startYear, dateRange.startMonth - 1, dateRange.startDay);
+
+      // Create end date (if not specified, use start date)
+      let endDate: Date;
+      if (dateRange.endYear > 0 && dateRange.endMonth > 0 && dateRange.endDay > 0) {
+        endDate = new Date(dateRange.endYear, dateRange.endMonth - 1, dateRange.endDay);
+      } else {
+        endDate = new Date(startDate);
+      }
+
+      // Validate dates
+      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        console.error("[YT Analytics] Invalid date range:", dateRange);
+        return [];
+      }
+
+      // Generate all dates in range (inclusive), adding 1 day to each
+      const currentDate = new Date(startDate);
+      while (currentDate <= endDate) {
+        // Add 1 day to get the next day's stats (at ~12:10 AM)
+        const nextDay = new Date(currentDate);
+        nextDay.setDate(nextDay.getDate() + 1);
+
+        const formattedDate = `${monthNames[nextDay.getMonth()]} ${nextDay.getDate()}`;
+        dates.push(formattedDate);
+
+        // Move to next day
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+
+      console.log("[YT Analytics] User configured date range:",
+        `${monthNames[startDate.getMonth()]} ${startDate.getDate()} - ${monthNames[endDate.getMonth()]} ${endDate.getDate()}`);
+      console.log("[YT Analytics] Target dates for stats (next days at ~12:10 AM):", dates);
+      return dates;
     }
 
     console.warn("[YT Analytics] No valid date range found in storage");
-    return "";
+    return [];
   } catch (error) {
-    console.error("[YT Analytics] Failed to load target date:", error);
-    return "";
+    console.error("[YT Analytics] Failed to load target dates:", error);
+    return [];
   }
 }
 
@@ -416,7 +455,7 @@ async function collectDataByHovering(): Promise<void> {
     console.log("[YT Analytics] Hover collection complete");
     console.log("[YT Analytics] ============================================");
     console.log("[YT Analytics] Total data points collected:", collectedData.length);
-    console.log("[YT Analytics] Configured date filter:", targetDate);
+    console.log("[YT Analytics] Configured date filter:", targetDates);
     console.log("[YT Analytics] All collected tooltip data:");
     console.table(collectedData);
     console.log("[YT Analytics] ============================================");
@@ -574,11 +613,11 @@ async function extractTooltipData(xPosition: number): Promise<void> {
 
       console.log("[YT Analytics] Parsed date:", date);
       console.log("[YT Analytics] Parsed time:", time);
-      console.log("[YT Analytics] Target date:", targetDate);
+      console.log("[YT Analytics] Target dates:", targetDates);
 
-      // Filter: only collect data for the target date
-      if (targetDate && date !== targetDate) {
-        console.log("[YT Analytics] ❌ Skipped - date doesn't match target");
+      // Filter: only collect data for dates in the target dates array
+      if (targetDates.length > 0 && !targetDates.includes(date)) {
+        console.log("[YT Analytics] ❌ Skipped - date not in target range");
         return;
       }
 
@@ -662,53 +701,80 @@ function parseDateTime(dateTimeStr: string): number {
 }
 
 /**
- * Process collected data to select nearest midnight point for target date
+ * Process collected data to select nearest 12:10 AM point for EACH date
  */
 function processDailyStats(data: DataPoint[]): DailyStats[] {
   if (data.length === 0) {
-    console.warn("[YT Analytics] No data collected for target date:", targetDate);
+    console.warn("[YT Analytics] No data collected for target dates:", targetDates);
     return [];
   }
 
-  // All collected data should be for the target date (due to filtering in extractTooltipData)
-  // Find the point closest to midnight (12:00 AM)
-  let closestPoint = data[0];
-  let minTimeDiff = Infinity;
-
+  // Group data by date
+  const dataByDate = new Map<string, DataPoint[]>();
   for (const point of data) {
-    // Calculate time difference from midnight (00:00)
-    const time = point.time.toLowerCase();
-    const hourMatch = time.match(/(\d+):(\d+)\s*(am|pm)/i);
-
-    if (hourMatch) {
-      let hour = parseInt(hourMatch[1]);
-      const minute = parseInt(hourMatch[2]);
-      const period = hourMatch[3].toLowerCase();
-
-      // Convert to 24-hour format
-      if (period === 'am' && hour === 12) hour = 0;
-      if (period === 'pm' && hour !== 12) hour += 12;
-
-      // Calculate minutes from midnight
-      const minutesFromMidnight = hour * 60 + minute;
-
-      if (minutesFromMidnight < minTimeDiff) {
-        minTimeDiff = minutesFromMidnight;
-        closestPoint = point;
-      }
+    if (!dataByDate.has(point.date)) {
+      dataByDate.set(point.date, []);
     }
+    dataByDate.get(point.date)!.push(point);
   }
 
-  const dailyStats: DailyStats[] = [{
-    date: closestPoint.date,
-    totalViews: closestPoint.totalViews,
-    advertisingViews: closestPoint.advertisingViews,
-    trafficSources: closestPoint.trafficSources,
-    selectedTime: closestPoint.time
-  }];
+  console.log("[YT Analytics] Collected data for", dataByDate.size, "dates:", Array.from(dataByDate.keys()));
 
-  console.log("[YT Analytics] Selected nearest midnight time:", closestPoint.time, "for date:", targetDate);
-  console.log("[YT Analytics] Traffic sources at midnight:", closestPoint.trafficSources);
+  // Find the point closest to 12:10 AM (00:10) for each date
+  const targetHour = 0;  // 12 AM in 24-hour format
+  const targetMinute = 10;
+  const targetMinutesFromMidnight = targetHour * 60 + targetMinute; // 10 minutes
+
+  const dailyStats: DailyStats[] = [];
+
+  // Process each date
+  for (const [date, points] of dataByDate.entries()) {
+    console.log(`[YT Analytics] Processing ${points.length} data points for date: ${date}`);
+    console.table(points.map(p => ({ time: p.time, totalViews: p.totalViews })));
+
+    let closestPoint = points[0];
+    let minTimeDiff = Infinity;
+
+    for (const point of points) {
+      // Calculate time difference from 12:10 AM (00:10)
+      const time = point.time.toLowerCase();
+      const hourMatch = time.match(/(\d+):(\d+)\s*(am|pm)/i);
+
+      if (hourMatch) {
+        let hour = parseInt(hourMatch[1]);
+        const minute = parseInt(hourMatch[2]);
+        const period = hourMatch[3].toLowerCase();
+
+        // Convert to 24-hour format
+        if (period === 'am' && hour === 12) hour = 0;
+        if (period === 'pm' && hour !== 12) hour += 12;
+
+        // Calculate minutes from midnight
+        const minutesFromMidnight = hour * 60 + minute;
+
+        // Calculate absolute difference from 12:10 AM
+        const timeDiff = Math.abs(minutesFromMidnight - targetMinutesFromMidnight);
+
+        if (timeDiff < minTimeDiff) {
+          minTimeDiff = timeDiff;
+          closestPoint = point;
+        }
+      }
+    }
+
+    dailyStats.push({
+      date: closestPoint.date,
+      totalViews: closestPoint.totalViews,
+      advertisingViews: closestPoint.advertisingViews,
+      trafficSources: closestPoint.trafficSources,
+      selectedTime: closestPoint.time
+    });
+
+    console.log(`[YT Analytics] Selected time for ${date}:`, closestPoint.time, "(diff:", minTimeDiff, "minutes)");
+    console.log(`[YT Analytics] Traffic sources:`, closestPoint.trafficSources);
+  }
+
+  console.log("[YT Analytics] Total daily stats processed:", dailyStats.length);
   return dailyStats;
 }
 
@@ -747,12 +813,13 @@ async function copyToClipboard(dailyStats: DailyStats[]): Promise<void> {
 
     const tsv = [header, ...rows].join('\n');
 
-    // Log what's being copied within the configured date
+    // Log what's being copied within the configured dates
     console.log("[YT Analytics] ============================================");
     console.log("[YT Analytics] Copying comprehensive analytics data");
     console.log("[YT Analytics] ============================================");
-    console.log("[YT Analytics] Configured date range:", targetDate);
-    console.log("[YT Analytics] Number of data points copied:", dailyStats.length);
+    console.log("[YT Analytics] Configured date range:", targetDates.length > 0 ? `${targetDates[0]} to ${targetDates[targetDates.length - 1]}` : "Not set");
+    console.log("[YT Analytics] Number of dates:", targetDates.length);
+    console.log("[YT Analytics] Number of data rows copied:", dailyStats.length);
     console.log("[YT Analytics] Traffic source columns:", sourceColumns);
     console.log("[YT Analytics] Raw TSV format:");
     console.log(tsv);
@@ -784,16 +851,19 @@ async function executeWorkflow(): Promise<void> {
   console.log("[YT Analytics] ========================================");
 
   try {
-    // Step 0: Load target date from storage
-    targetDate = await loadTargetDate();
+    // Step 0: Load target dates from storage
+    targetDates = await loadTargetDates();
 
-    if (!targetDate) {
+    if (targetDates.length === 0) {
       showToast("대상 날짜를 먼저 설정하세요 (팝업에서 설정)", "error", 5000);
-      throw new Error("Target date not configured. Please set it in the popup first.");
+      throw new Error("Target dates not configured. Please set date range in the popup first.");
     }
 
-    console.log("[YT Analytics] Target date:", targetDate);
-    showToast(`대상 날짜: ${targetDate}`, "info", 3000);
+    console.log("[YT Analytics] Target dates:", targetDates);
+    const dateRangeMsg = targetDates.length === 1
+      ? `${targetDates[0]}`
+      : `${targetDates[0]} - ${targetDates[targetDates.length - 1]}`;
+    showToast(`수집 날짜: ${dateRangeMsg} (~12:10 AM)`, "info", 3000);
     await new Promise(resolve => setTimeout(resolve, 1000));
 
     // Step 1: Check "Total" checkbox
@@ -821,6 +891,82 @@ async function executeWorkflow(): Promise<void> {
   } catch (error) {
     console.error("[YT Analytics] Workflow failed:", error);
     showToast(`오류: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
+  }
+}
+
+/**
+ * Update date status display with current date range from storage
+ */
+async function updateDateStatusDisplay(showLoading: boolean = false): Promise<void> {
+  const dateStatus = document.getElementById("ytstudio-analytics-date-status");
+  if (!dateStatus) return;
+
+  // Show loading state if requested
+  if (showLoading) {
+    dateStatus.innerHTML = `
+      <svg class="loading-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; margin-right: 6px;">
+        <circle cx="12" cy="12" r="10" opacity="0.25"></circle>
+        <path d="M12 2 A10 10 0 0 1 22 12" opacity="0.75"></path>
+      </svg>
+      <span style="vertical-align: middle;">Syncing...</span>
+    `;
+    dateStatus.style.background = '#fef3c7';
+    dateStatus.style.color = '#92400e';
+
+    // Add spin animation if not already added
+    if (!document.getElementById('date-sync-spinner-style')) {
+      const style = document.createElement('style');
+      style.id = 'date-sync-spinner-style';
+      style.textContent = `
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  }
+
+  try {
+    const result = await chrome.storage.local.get([STORAGE_KEYS.DATE_RANGE]);
+    const dateRange = result[STORAGE_KEYS.DATE_RANGE];
+
+    if (dateRange && dateRange.startYear > 0 && dateRange.startMonth > 0 && dateRange.startDay > 0) {
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+      const startDate = new Date(dateRange.startYear, dateRange.startMonth - 1, dateRange.startDay);
+      const startFormatted = `${monthNames[startDate.getMonth()]} ${startDate.getDate()}`;
+
+      // Check if there's an end date and it's different from start date
+      if (dateRange.endYear > 0 && dateRange.endMonth > 0 && dateRange.endDay > 0) {
+        const endDate = new Date(dateRange.endYear, dateRange.endMonth - 1, dateRange.endDay);
+
+        // Compare dates
+        if (startDate.getTime() !== endDate.getTime()) {
+          // Show range: "Nov 6 -> Nov 11"
+          const endFormatted = `${monthNames[endDate.getMonth()]} ${endDate.getDate()}`;
+          dateStatus.textContent = `${startFormatted} → ${endFormatted}`;
+        } else {
+          // Single date: "Nov 6"
+          dateStatus.textContent = `${startFormatted}`;
+        }
+      } else {
+        // Only start date configured
+        dateStatus.textContent = `${startFormatted}`;
+      }
+
+      dateStatus.style.background = '#d1fae5';
+      dateStatus.style.color = '#065f46';
+    } else {
+      dateStatus.textContent = `⚠️ Set date in popup`;
+      dateStatus.style.background = '#fee2e2';
+      dateStatus.style.color = '#991b1b';
+    }
+  } catch (error) {
+    console.error("[YT Analytics] Failed to load date range for display:", error);
+    dateStatus.textContent = `⚠️ Set date in popup`;
+    dateStatus.style.background = '#fee2e2';
+    dateStatus.style.color = '#991b1b';
   }
 }
 
@@ -871,19 +1017,10 @@ async function injectUI(): Promise<void> {
       text-align: center;
     `;
 
-    // Load and display configured date
-    const loadedDate = await loadTargetDate();
-    if (loadedDate) {
-      dateStatus.textContent = `📅 Target: ${loadedDate}`;
-      dateStatus.style.background = '#d1fae5';
-      dateStatus.style.color = '#065f46';
-    } else {
-      dateStatus.textContent = `⚠️ No date configured`;
-      dateStatus.style.background = '#fee2e2';
-      dateStatus.style.color = '#991b1b';
-    }
-
     document.body.appendChild(dateStatus);
+
+    // Load and display initial date range
+    await updateDateStatusDisplay();
   }
 
   // Inject start button
@@ -955,12 +1092,23 @@ async function initialize(): Promise<void> {
   console.log("[YT Analytics] Ready! Click 'Start Data Collection' button to begin.");
 
   // Show initial date status
-  const currentTargetDate = await loadTargetDate();
-  if (currentTargetDate) {
-    console.log("[YT Analytics] ✓ Target date configured:", currentTargetDate);
+  const currentTargetDates = await loadTargetDates();
+  if (currentTargetDates.length > 0) {
+    const dateRangeMsg = currentTargetDates.length === 1
+      ? currentTargetDates[0]
+      : `${currentTargetDates[0]} - ${currentTargetDates[currentTargetDates.length - 1]}`;
+    console.log("[YT Analytics] ✓ Target dates configured:", dateRangeMsg);
   } else {
-    console.warn("[YT Analytics] ⚠️  No target date configured. Please set it in the extension popup.");
+    console.warn("[YT Analytics] ⚠️  No target dates configured. Please set date range in the extension popup.");
   }
+
+  // Listen for date range changes in storage and update display instantly
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes[STORAGE_KEYS.DATE_RANGE]) {
+      console.log("[YT Analytics] Date range changed, updating display...");
+      updateDateStatusDisplay(true); // Show loading indicator during sync
+    }
+  });
 }
 
 // Run initialization when DOM is ready
