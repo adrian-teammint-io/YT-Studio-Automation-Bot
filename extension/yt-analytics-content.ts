@@ -8,12 +8,18 @@
 
 import { STORAGE_KEYS } from "./constants/storage";
 
+interface TrafficSource {
+  title: string;
+  value: number;
+}
+
 interface DataPoint {
   date: string;
   time: string;
   timestamp: number;
   totalViews: number;
   advertisingViews: number;
+  trafficSources: TrafficSource[]; // All traffic source stats from tooltip
   xPosition: number;
   yPosition: number;
 }
@@ -22,6 +28,7 @@ interface DailyStats {
   date: string;
   totalViews: number;
   advertisingViews: number;
+  trafficSources: TrafficSource[]; // All traffic source stats
   selectedTime: string;
 }
 
@@ -299,6 +306,7 @@ function extractChartData(): DataPoint[] {
         timestamp: Date.now() + i * 1000, // Placeholder
         totalViews: yToValue(totalPoint.y),
         advertisingViews: yToValue(advPoint.y),
+        trafficSources: [], // Will be filled when hovering
         xPosition: totalPoint.x,
         yPosition: totalPoint.y
       });
@@ -374,11 +382,28 @@ async function collectDataByHovering(): Promise<void> {
       mousePane.dispatchEvent(mouseEnterEvent);
       mousePane.dispatchEvent(mouseMoveEvent);
 
-      // Wait for tooltip to appear
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // Wait for tooltip to appear and become visible (retry up to 5 times)
+      let tooltipFound = false;
+      for (let retry = 0; retry < 5; retry++) {
+        await new Promise(resolve => setTimeout(resolve, 50));
 
-      // Extract tooltip data
-      await extractTooltipData(x);
+        // Check if tooltip is visible
+        const visibleTooltip = findVisibleHovercard();
+        if (visibleTooltip) {
+          tooltipFound = true;
+          break;
+        }
+      }
+
+      if (tooltipFound) {
+        // Extract tooltip data
+        await extractTooltipData(x);
+      } else {
+        // Only log every 10th failure to reduce console noise
+        if (i % 10 === 0) {
+          console.log(`[YT Analytics] ⚠️ No visible tooltip at x=${x} after retries`);
+        }
+      }
     }
 
     // Dispatch mouse leave event
@@ -387,12 +412,21 @@ async function collectDataByHovering(): Promise<void> {
     });
     mousePane.dispatchEvent(mouseLeaveEvent);
 
-    console.log("[YT Analytics] Collected", collectedData.length, "data points");
+    console.log("[YT Analytics] ============================================");
+    console.log("[YT Analytics] Hover collection complete");
+    console.log("[YT Analytics] ============================================");
+    console.log("[YT Analytics] Total data points collected:", collectedData.length);
+    console.log("[YT Analytics] Configured date filter:", targetDate);
+    console.log("[YT Analytics] All collected tooltip data:");
+    console.table(collectedData);
+    console.log("[YT Analytics] ============================================");
+
     showToast(`${collectedData.length}개 데이터 포인트 수집 완료`, "success");
 
     // Process collected data to select nearest midnight per day
     const dailyStats = processDailyStats(collectedData);
-    console.log("[YT Analytics] Daily stats:", dailyStats);
+    console.log("[YT Analytics] Processed daily stats (nearest midnight):");
+    console.table(dailyStats);
 
     // Copy to clipboard
     await copyToClipboard(dailyStats);
@@ -406,50 +440,209 @@ async function collectDataByHovering(): Promise<void> {
 }
 
 /**
+ * Find visible yta-deep-dive-hovercard element
+ * The hovercard can be hidden with opacity: 0 or visibility: hidden, so we need to check
+ */
+function findVisibleHovercard(): Element | null {
+  // First, try to find the specific yta-deep-dive-hovercard element
+  const hovercards = document.querySelectorAll('yta-deep-dive-hovercard');
+
+  for (const hovercard of hovercards) {
+    const style = window.getComputedStyle(hovercard as HTMLElement);
+    const parent = hovercard.parentElement;
+    const parentStyle = parent ? window.getComputedStyle(parent) : null;
+
+    // Check if this hovercard is visible
+    // It should have opacity > 0 and visibility: visible
+    const isVisible =
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      parseFloat(style.opacity) > 0 &&
+      (!parentStyle || (
+        parentStyle.display !== 'none' &&
+        parentStyle.visibility !== 'hidden' &&
+        parseFloat(parentStyle.opacity) > 0
+      ));
+
+    if (isVisible) {
+      console.log("[YT Analytics] ✅ Found VISIBLE yta-deep-dive-hovercard");
+      console.log("[YT Analytics] Hovercard opacity:", style.opacity);
+      console.log("[YT Analytics] Hovercard visibility:", style.visibility);
+      if (parentStyle) {
+        console.log("[YT Analytics] Parent opacity:", parentStyle.opacity);
+        console.log("[YT Analytics] Parent visibility:", parentStyle.visibility);
+      }
+      return hovercard;
+    } else {
+      console.log("[YT Analytics] ⚠️ Found yta-deep-dive-hovercard but it's HIDDEN");
+      console.log("[YT Analytics] Hovercard opacity:", style.opacity);
+      console.log("[YT Analytics] Hovercard visibility:", style.visibility);
+    }
+  }
+
+  return null;
+}
+
+/**
  * Extract tooltip data when hovering
  */
 async function extractTooltipData(xPosition: number): Promise<void> {
-  // Look for tooltip/hover elements
-  // This is a placeholder - actual implementation depends on YouTube's tooltip structure
-  const tooltip = document.querySelector('.yta-hover-card, .tooltip, [role="tooltip"]');
+  // Look for visible yta-deep-dive-hovercard element
+  const tooltip = findVisibleHovercard();
 
   if (tooltip) {
+    // Log tooltip structure
+    console.log("[YT Analytics] 📊 Tooltip found at x:", xPosition);
+    console.log("[YT Analytics] Tooltip element tag:", tooltip.tagName);
+    console.log("[YT Analytics] Tooltip classes:", tooltip.className);
+    console.log("[YT Analytics] Tooltip innerHTML (first 500 chars):", tooltip.innerHTML?.substring(0, 500));
+
+    // Try multiple selector patterns to find value elements
+    const selectors = [
+      '.value.style-scope.yta-deep-dive-hovercard',
+      '.value',
+      '[class*="value"]',
+      'div.value',
+      '.yta-deep-dive-hovercard .value'
+    ];
+
+    let valueElements: NodeListOf<Element> | null = null;
+    for (const selector of selectors) {
+      const found = tooltip.querySelectorAll(selector);
+      if (found.length > 0) {
+        console.log(`[YT Analytics] Found ${found.length} elements with selector: "${selector}"`);
+        valueElements = found;
+        break;
+      }
+    }
+
+    if (valueElements && valueElements.length > 0) {
+      console.log("[YT Analytics] ✅ Value elements found:", valueElements.length);
+      valueElements.forEach((el, idx) => {
+        console.log(`[YT Analytics] Value element ${idx}:`, {
+          textContent: el.textContent,
+          className: el.className,
+          tagName: el.tagName
+        });
+      });
+    } else {
+      console.log("[YT Analytics] ⚠️  No value elements found with any selector");
+    }
+
     // Extract date, time, and values from tooltip
     const text = tooltip.textContent || '';
 
-    // Parse tooltip text (format may vary)
-    // Example: "Nov 5, 12:10 AM\nTotal: 142K\nAdvertising: 138K"
-    const lines = text.split('\n').map(l => l.trim());
+    console.log("[YT Analytics] Raw tooltip text:", text);
 
-    if (lines.length >= 3) {
-      const dateTime = lines[0]; // "Nov 5, 12:10 AM"
-      const date = dateTime.split(',')[0].trim(); // "Nov 5"
+    // Check if tooltip contains "First"
+    if (text.includes('First') || text.includes('first')) {
+      console.log("[YT Analytics] ⚠️  WARNING: Tooltip contains 'First' keyword!");
+      console.log("[YT Analytics] Full text with 'First':", text);
+    }
+
+    // Try to parse using the actual YouTube tooltip structure
+    // Structure: date element, subtitle (with "First X days"), then rows with title/value pairs
+    const dateEl = tooltip.querySelector('.date.style-scope.yta-deep-dive-hovercard');
+    const subtitleEl = tooltip.querySelector('.subtitle.style-scope.yta-deep-dive-hovercard');
+
+    // Extract ALL rows (traffic sources)
+    const rowEls = tooltip.querySelectorAll('.row.style-scope.yta-deep-dive-hovercard');
+
+    if (dateEl && rowEls.length >= 2) {
+      const dateTimeText = dateEl.textContent?.trim() || '';
+      const subtitleText = subtitleEl?.textContent?.trim() || '';
+
+      console.log("[YT Analytics] Date element:", dateTimeText);
+      console.log("[YT Analytics] Subtitle:", subtitleText);
+      console.log("[YT Analytics] Found", rowEls.length, "traffic source rows");
+
+      if (subtitleText.includes('First') || subtitleText.includes('first')) {
+        console.log("[YT Analytics] ⚠️  Subtitle contains 'First':", subtitleText);
+      }
+
+      // Parse date from "Sat, Nov 8, 1:10 AM" → "Nov 8"
+      const dateParts = dateTimeText.match(/([A-Z][a-z]{2}),?\s+([A-Z][a-z]{2})\s+(\d{1,2}),?\s+(\d{1,2}:\d{2}\s+[AP]M)/i);
+      if (!dateParts) {
+        console.log("[YT Analytics] ⚠️  Could not parse date from:", dateTimeText);
+        return;
+      }
+
+      const month = dateParts[2]; // "Nov"
+      const day = dateParts[3];   // "8"
+      const time = dateParts[4];  // "1:10 AM"
+      const date = `${month} ${day}`; // "Nov 8"
+
+      console.log("[YT Analytics] Parsed date:", date);
+      console.log("[YT Analytics] Parsed time:", time);
+      console.log("[YT Analytics] Target date:", targetDate);
 
       // Filter: only collect data for the target date
       if (targetDate && date !== targetDate) {
-        return; // Skip this data point if it's not the target date
+        console.log("[YT Analytics] ❌ Skipped - date doesn't match target");
+        return;
       }
 
-      const totalMatch = lines[1].match(/[\d,.]+K?/);
-      const advertisingMatch = lines[2].match(/[\d,.]+K?/);
+      // Parse values - remove commas and convert to number
+      const parseValue = (str: string): number => {
+        return parseInt(str.replace(/,/g, ''), 10) || 0;
+      };
 
-      if (dateTime && totalMatch && advertisingMatch) {
-        // Parse values (K = 1000)
-        const parseValue = (str: string): number => {
-          const value = parseFloat(str.replace(/,/g, ''));
-          return str.includes('K') ? value * 1000 : value;
-        };
+      // Extract ALL traffic sources from rows
+      const trafficSources: TrafficSource[] = [];
+      let totalViews = 0;
+      let advertisingViews = 0;
 
-        collectedData.push({
-          date: date,
-          time: dateTime.split(',')[1]?.trim() || '', // "12:10 AM"
-          timestamp: parseDateTime(dateTime),
-          totalViews: parseValue(totalMatch[0]),
-          advertisingViews: parseValue(advertisingMatch[0]),
-          xPosition,
-          yPosition: 0 // Not used in this approach
-        });
-      }
+      rowEls.forEach((row, index) => {
+        const titleEl = row.querySelector('.title.style-scope.yta-deep-dive-hovercard');
+        const valueEl = row.querySelector('.value.style-scope.yta-deep-dive-hovercard');
+
+        if (titleEl && valueEl) {
+          const title = titleEl.textContent?.trim() || '';
+          const valueText = valueEl.textContent?.trim() || '0';
+          const value = parseValue(valueText);
+
+          trafficSources.push({ title, value });
+
+          console.log(`[YT Analytics] Row ${index}: ${title} = ${value}`);
+
+          // Capture specific values for backward compatibility
+          if (index === 0) {
+            totalViews = value; // First row is typically "Total" or most significant metric
+          }
+          if (title.toLowerCase().includes('youtube advertising')) {
+            advertisingViews = value;
+          }
+        }
+      });
+
+      console.log("[YT Analytics] Extracted traffic sources:", trafficSources);
+
+      const dataPoint = {
+        date: date,
+        time: time,
+        timestamp: parseDateTime(dateTimeText),
+        totalViews,
+        advertisingViews,
+        trafficSources,
+        xPosition,
+        yPosition: 0
+      };
+
+      collectedData.push(dataPoint);
+      console.log("[YT Analytics] ✅ Data point collected:", dataPoint);
+    } else {
+      console.log("[YT Analytics] ⚠️  Could not find required elements in yta-deep-dive-hovercard");
+      console.log("[YT Analytics] Date element found:", !!dateEl);
+      console.log("[YT Analytics] Row elements count:", rowEls.length);
+      console.log("[YT Analytics] Expected at least 2 rows with .row.style-scope.yta-deep-dive-hovercard");
+      console.log("[YT Analytics] Tooltip HTML structure:", tooltip.innerHTML?.substring(0, 1000));
+    }
+  } else {
+    // Only log every 20th miss to avoid console spam
+    if (Math.random() < 0.05) {
+      console.log("[YT Analytics] ⚠️ No visible yta-deep-dive-hovercard found at x:", xPosition);
+      const allHovercards = document.querySelectorAll('yta-deep-dive-hovercard');
+      console.log("[YT Analytics] Total hovercards in DOM:", allHovercards.length);
     }
   }
 }
@@ -510,10 +703,12 @@ function processDailyStats(data: DataPoint[]): DailyStats[] {
     date: closestPoint.date,
     totalViews: closestPoint.totalViews,
     advertisingViews: closestPoint.advertisingViews,
+    trafficSources: closestPoint.trafficSources,
     selectedTime: closestPoint.time
   }];
 
   console.log("[YT Analytics] Selected nearest midnight time:", closestPoint.time, "for date:", targetDate);
+  console.log("[YT Analytics] Traffic sources at midnight:", closestPoint.trafficSources);
   return dailyStats;
 }
 
@@ -522,22 +717,58 @@ function processDailyStats(data: DataPoint[]): DailyStats[] {
  */
 async function copyToClipboard(dailyStats: DailyStats[]): Promise<void> {
   try {
-    // Format as TSV
-    const header = "Date\tSelected Time\tTotal Views\tAdvertising Views";
-    const rows = dailyStats.map(stat =>
-      `${stat.date}\t${stat.selectedTime}\t${stat.totalViews}\t${stat.advertisingViews}`
-    );
+    // Get all unique traffic source titles from all stats
+    const allSourceTitles = new Set<string>();
+    dailyStats.forEach(stat => {
+      stat.trafficSources.forEach(source => {
+        allSourceTitles.add(source.title);
+      });
+    });
+    const sourceColumns = Array.from(allSourceTitles);
+
+    // Format as TSV with dynamic columns for each traffic source
+    const header = ["Date", "Selected Time", "Total Views", "Advertising Views", ...sourceColumns].join('\t');
+
+    const rows = dailyStats.map(stat => {
+      // Create a map of traffic source values for quick lookup
+      const sourceMap = new Map(stat.trafficSources.map(s => [s.title, s.value]));
+
+      // Build row with all columns
+      const columns = [
+        stat.date,
+        stat.selectedTime,
+        stat.totalViews.toString(),
+        stat.advertisingViews.toString(),
+        ...sourceColumns.map(title => (sourceMap.get(title) || 0).toString())
+      ];
+
+      return columns.join('\t');
+    });
+
     const tsv = [header, ...rows].join('\n');
+
+    // Log what's being copied within the configured date
+    console.log("[YT Analytics] ============================================");
+    console.log("[YT Analytics] Copying comprehensive analytics data");
+    console.log("[YT Analytics] ============================================");
+    console.log("[YT Analytics] Configured date range:", targetDate);
+    console.log("[YT Analytics] Number of data points copied:", dailyStats.length);
+    console.log("[YT Analytics] Traffic source columns:", sourceColumns);
+    console.log("[YT Analytics] Raw TSV format:");
+    console.log(tsv);
+    console.log("[YT Analytics] Parsed data structure:");
+    console.table(dailyStats);
+    console.log("[YT Analytics] Traffic sources detail:");
+    dailyStats.forEach(stat => {
+      console.table(stat.trafficSources);
+    });
+    console.log("[YT Analytics] ============================================");
 
     // Copy to clipboard
     await navigator.clipboard.writeText(tsv);
 
     console.log("[YT Analytics] Data copied to clipboard");
-    showToast("데이터가 클립보드에 복사되었습니다", "success", 5000);
-
-    // Also log to console for easy access
-    console.log("[YT Analytics] Daily Stats:");
-    console.table(dailyStats);
+    showToast("데이터가 클립보드에 복사되었습니다 (모든 트래픽 소스 포함)", "success", 5000);
   } catch (error) {
     console.error("[YT Analytics] Failed to copy to clipboard:", error);
     showToast("클립보드 복사 실패", "error");
