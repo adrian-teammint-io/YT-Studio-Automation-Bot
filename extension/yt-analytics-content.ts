@@ -19,6 +19,7 @@ interface DataPoint {
   timestamp: number;
   totalViews: number;
   advertisingViews: number;
+  engagedViews?: number; // Optional: collected in second pass
   trafficSources: TrafficSource[]; // All traffic source stats from tooltip
   xPosition: number;
   yPosition: number;
@@ -28,12 +29,15 @@ interface DailyStats {
   date: string;
   totalViews: number;
   advertisingViews: number;
+  engagedViews?: number; // Optional: collected in second pass
   trafficSources: TrafficSource[]; // All traffic source stats
   selectedTime: string;
 }
 
 let collectedData: DataPoint[] = [];
 let collectedDataSet = new Set<string>(); // Track unique data points by "date:time" key
+let engagedViewsData: DataPoint[] = []; // Second pass: engaged views data
+let engagedViewsDataSet = new Set<string>(); // Track unique engaged views data points
 let isCollecting = false;
 let chartSvg: SVGElement | null = null;
 let targetDates: string[] = []; // Format: array of "Nov 11" (month day)
@@ -156,15 +160,23 @@ function showToast(message: string, type: "info" | "success" | "error" | "loadin
 }
 
 /**
- * Step 1: Check the "Total" checkbox
+ * Generic helper function to check a checkbox by selector
  */
-async function checkTotalCheckbox(): Promise<boolean> {
-  // console.log("[YT Analytics] Step 1: Checking 'Total' checkbox...");
-  showToast("총계 체크박스 선택 중...", "loading");
+async function checkCheckbox(
+  selector: string,
+  toastMessages: {
+    loading: string;
+    success: string;
+    info: string;
+    error: string;
+    notFound: string;
+  },
+  checkboxName: string
+): Promise<boolean> {
+  showToast(toastMessages.loading, "loading");
 
   try {
-    // Find checkbox by aria-label attribute
-    const checkboxElement = document.querySelector('ytcp-checkbox-lit[aria-label*="Total"]');
+    const checkboxElement = document.querySelector(selector);
 
     if (checkboxElement) {
       const checkbox = checkboxElement.querySelector('#checkbox[role="checkbox"]') as HTMLElement;
@@ -173,70 +185,62 @@ async function checkTotalCheckbox(): Promise<boolean> {
         const ariaChecked = checkbox.getAttribute('aria-checked');
 
         if (ariaChecked !== 'true') {
-          // console.log("[YT Analytics] Found unchecked 'Total' checkbox, clicking...");
+          // console.log(`[YT Analytics] Found unchecked '${checkboxName}' checkbox, clicking...`);
           checkbox.click();
           await new Promise(resolve => setTimeout(resolve, 500));
-          showToast("총계 체크박스 선택 완료", "success");
+          showToast(toastMessages.success, "success");
           return true;
         } else {
-          // console.log("[YT Analytics] 'Total' checkbox already checked");
-          showToast("총계 체크박스 이미 선택됨", "info");
+          // console.log(`[YT Analytics] '${checkboxName}' checkbox already checked`);
+          showToast(toastMessages.info, "info");
           return true;
         }
       }
     }
 
-    // console.warn("[YT Analytics] 'Total' checkbox not found");
+    // console.warn(`[YT Analytics] '${checkboxName}' checkbox not found`);
     // console.warn("[YT Analytics] Available checkboxes:", Array.from(document.querySelectorAll('ytcp-checkbox-lit')).map(el => el.getAttribute('aria-label')));
-    showToast("총계 체크박스를 찾을 수 없습니다", "error");
+    showToast(toastMessages.notFound, "error");
     return false;
   } catch (error) {
-    // console.error("[YT Analytics] Error checking 'Total' checkbox:", error);
-    showToast("총계 체크박스 선택 실패", "error");
+    // console.error(`[YT Analytics] Error checking '${checkboxName}' checkbox:`, error);
+    showToast(toastMessages.error, "error");
     return false;
   }
+}
+
+/**
+ * Step 1: Check the "Total" checkbox
+ */
+async function checkTotalCheckbox(): Promise<boolean> {
+  return checkCheckbox(
+    'ytcp-checkbox-lit[aria-label*="Total"]',
+    {
+      loading: "총계 체크박스 선택 중...",
+      success: "총계 체크박스 선택 완료",
+      info: "총계 체크박스 이미 선택됨",
+      error: "총계 체크박스 선택 실패",
+      notFound: "총계 체크박스를 찾을 수 없습니다"
+    },
+    "Total"
+  );
 }
 
 /**
  * Step 2: Check the "YouTube advertising" checkbox
  */
 async function checkAdvertisingCheckbox(): Promise<boolean> {
-  // console.log("[YT Analytics] Step 2: Checking 'YouTube advertising' checkbox...");
-  showToast("YouTube 광고 체크박스 선택 중...", "loading");
-
-  try {
-    // Find checkbox by aria-label attribute
-    const checkboxElement = document.querySelector('ytcp-checkbox-lit[aria-label*="YouTube advertising"]');
-
-    if (checkboxElement) {
-      const checkbox = checkboxElement.querySelector('#checkbox[role="checkbox"]') as HTMLElement;
-
-      if (checkbox) {
-        const ariaChecked = checkbox.getAttribute('aria-checked');
-
-        if (ariaChecked !== 'true') {
-          // console.log("[YT Analytics] Found unchecked 'YouTube advertising' checkbox, clicking...");
-          checkbox.click();
-          await new Promise(resolve => setTimeout(resolve, 500));
-          showToast("YouTube 광고 체크박스 선택 완료", "success");
-          return true;
-        } else {
-          // console.log("[YT Analytics] 'YouTube advertising' checkbox already checked");
-          showToast("YouTube 광고 체크박스 이미 선택됨", "info");
-          return true;
-        }
-      }
-    }
-
-    // console.warn("[YT Analytics] 'YouTube advertising' checkbox not found");
-    // console.warn("[YT Analytics] Available checkboxes:", Array.from(document.querySelectorAll('ytcp-checkbox-lit')).map(el => el.getAttribute('aria-label')));
-    showToast("YouTube 광고 체크박스를 찾을 수 없습니다", "error");
-    return false;
-  } catch (error) {
-    // console.error("[YT Analytics] Error checking 'YouTube advertising' checkbox:", error);
-    showToast("YouTube 광고 체크박스 선택 실패", "error");
-    return false;
-  }
+  return checkCheckbox(
+    'ytcp-checkbox-lit[aria-label*="YouTube advertising"]',
+    {
+      loading: "YouTube 광고 체크박스 선택 중...",
+      success: "YouTube 광고 체크박스 선택 완료",
+      info: "YouTube 광고 체크박스 이미 선택됨",
+      error: "YouTube 광고 체크박스 선택 실패",
+      notFound: "YouTube 광고 체크박스를 찾을 수 없습니다"
+    },
+    "YouTube advertising"
+  );
 }
 
 /**
@@ -800,14 +804,208 @@ async function collectDataByHovering(): Promise<void> {
       [STORAGE_KEYS.EXTRACTED_DATA]: extractedData
     });
 
-    // Copy to clipboard
-    await copyToClipboard(dailyStats);
-
   } catch (error) {
     // console.error("[YT Analytics] Error collecting data:", error);
     showToast("데이터 수집 실패", "error");
   } finally {
     isCollecting = false;
+  }
+}
+
+/**
+ * Step 9: Collect engaged views data by hovering (second pass)
+ * Similar to collectDataByHovering but stores in engagedViewsData
+ */
+async function collectEngagedViewsData(): Promise<void> {
+  showToast("Engaged views 데이터 수집 중...", "loading");
+
+  if (!chartSvg) {
+    showToast("차트를 찾을 수 없습니다", "error");
+    return;
+  }
+
+  isCollecting = true;
+  engagedViewsData = [];
+  engagedViewsDataSet.clear();
+
+  try {
+    const mousePane = chartSvg.querySelector('.mouseCapturePane') as SVGRectElement;
+
+    if (!mousePane) {
+      showToast("차트 인터랙션 영역을 찾을 수 없습니다", "error");
+      return;
+    }
+
+    const chartWidth = parseFloat(mousePane.getAttribute('width') || '978');
+    const chartHeight = parseFloat(mousePane.getAttribute('height') || '158');
+    const rect = mousePane.getBoundingClientRect();
+
+    const numPoints = 200;
+    const step = chartWidth / numPoints;
+
+    showToast("Engaged views 스캔 중...", "loading");
+
+    for (let i = 0; i < numPoints; i++) {
+      const x = i * step;
+      const y = chartHeight / 2;
+
+      const xOffset = (Math.random() - 0.5) * (step * 0.1);
+      const adjustedX = Math.max(0, Math.min(chartWidth, x + xOffset));
+
+      const clientX = rect.left + adjustedX;
+      const clientY = rect.top + y;
+
+      const mouseEnterEvent = new MouseEvent('mouseenter', {
+        bubbles: true,
+        clientX,
+        clientY
+      });
+
+      const mouseMoveEvent = new MouseEvent('mousemove', {
+        bubbles: true,
+        clientX,
+        clientY
+      });
+
+      mousePane.dispatchEvent(mouseEnterEvent);
+      mousePane.dispatchEvent(mouseMoveEvent);
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const visibleTooltip = findVisibleHovercard();
+      if (visibleTooltip) {
+        await extractEngagedViewsTooltipData(adjustedX);
+      }
+    }
+
+    const mouseLeaveEvent = new MouseEvent('mouseleave', {
+      bubbles: true
+    });
+    mousePane.dispatchEvent(mouseLeaveEvent);
+
+    console.log(`[YT Analytics] Collected ${engagedViewsData.length} engaged views data points for dates: ${targetDates.join(', ')}`);
+    console.table(engagedViewsData);
+
+    showToast(`${engagedViewsData.length}개 Engaged views 데이터 수집 완료`, "success");
+
+    // Merge engaged views data into extracted data
+    await mergeEngagedViewsIntoStorage();
+
+  } catch (error) {
+    showToast("Engaged views 데이터 수집 실패", "error");
+  } finally {
+    isCollecting = false;
+  }
+}
+
+/**
+ * Extract engaged views from tooltip data (second pass)
+ */
+async function extractEngagedViewsTooltipData(xPosition: number): Promise<void> {
+  const tooltip = findVisibleHovercard();
+
+  if (tooltip) {
+    const dateEl = tooltip.querySelector('.date.style-scope.yta-deep-dive-hovercard');
+    const rowEls = tooltip.querySelectorAll('.row.style-scope.yta-deep-dive-hovercard');
+
+    if (dateEl && rowEls.length >= 1) {
+      const dateTimeText = dateEl.textContent?.trim() || '';
+
+      const dateParts = dateTimeText.match(/([A-Z][a-z]{2}),?\\s+([A-Z][a-z]{2})\\s+(\\d{1,2}),?\\s+(\\d{1,2}:\\d{2}\\s+[AP]M)/i);
+      if (!dateParts) return;
+
+      const month = dateParts[2];
+      const day = dateParts[3];
+      const time = dateParts[4];
+      const date = `${month} ${day}`.trim();
+
+      const normalizedDate = date.trim();
+      const isInTargetDates = targetDates.length === 0 || targetDates.some(targetDate => targetDate.trim() === normalizedDate);
+
+      if (!isInTargetDates) return;
+
+      const minutesFromMidnight = timeToMinutes(time);
+      const is1210AM = minutesFromMidnight >= 9 && minutesFromMidnight <= 11;
+
+      if (!is1210AM) return;
+
+      console.log(`found engaged views for ${normalizedDate.toLowerCase()} at ${time}`);
+
+      const parseValue = (str: string): number => {
+        return parseInt(str.replace(/,/g, ''), 10) || 0;
+      };
+
+      let engagedViews = 0;
+
+      // Get the first row value (should be Engaged views)
+      const firstRow = rowEls[0];
+      const valueEl = firstRow.querySelector('.value.style-scope.yta-deep-dive-hovercard');
+      if (valueEl) {
+        const valueText = valueEl.textContent?.trim() || '0';
+        engagedViews = parseValue(valueText);
+      }
+
+      const dataPointKey = `${date}:${time}`;
+
+      if (!engagedViewsDataSet.has(dataPointKey)) {
+        const dataPoint: DataPoint = {
+          date: date,
+          time: time,
+          timestamp: parseDateTime(dateTimeText),
+          totalViews: 0,
+          advertisingViews: 0,
+          engagedViews: engagedViews,
+          trafficSources: [],
+          xPosition,
+          yPosition: 0
+        };
+
+        engagedViewsData.push(dataPoint);
+        engagedViewsDataSet.add(dataPointKey);
+      }
+    }
+  }
+}
+
+/**
+ * Merge engaged views data into storage (ads_true_views field)
+ */
+async function mergeEngagedViewsIntoStorage(): Promise<void> {
+  try {
+    const result = await chrome.storage.local.get([STORAGE_KEYS.EXTRACTED_DATA]);
+    const extractedData: Array<{
+      date: string;
+      normal_total_views: number;
+      normal_ads_views: number;
+      ads_true_views?: number;
+    }> = result[STORAGE_KEYS.EXTRACTED_DATA] || [];
+
+    // Group engaged views by date
+    const engagedViewsByDate = new Map<string, number>();
+    for (const point of engagedViewsData) {
+      const originalDate = convertToOriginalDate(point.date);
+      if (point.engagedViews !== undefined) {
+        engagedViewsByDate.set(originalDate, point.engagedViews);
+      }
+    }
+
+    // Update extracted data with ads_true_views
+    for (const entry of extractedData) {
+      const engagedViews = engagedViewsByDate.get(entry.date);
+      if (engagedViews !== undefined) {
+        entry.ads_true_views = engagedViews;
+        console.log(`[YT Analytics] Updated ${entry.date} with ads_true_views: ${engagedViews}`);
+      }
+    }
+
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.EXTRACTED_DATA]: extractedData
+    });
+
+    showToast("Engaged views 데이터 저장 완료", "success");
+  } catch (error) {
+    console.error("[YT Analytics] Failed to merge engaged views:", error);
+    showToast("Engaged views 저장 실패", "error");
   }
 }
 
@@ -1003,7 +1201,7 @@ async function extractTooltipData(xPosition: number): Promise<void> {
 
       // Create a unique key for this data point using date and time
       const dataPointKey = `${date}:${time}`;
-      
+
       // Only add if not already collected (deduplicate using Set)
       if (!collectedDataSet.has(dataPointKey)) {
         const dataPoint = {
@@ -1192,72 +1390,162 @@ function processDailyStats(data: DataPoint[]): DailyStats[] {
 }
 
 /**
- * Copy data to clipboard
+ * Step 5: Click "Add metric to table" button to open metric picker
  */
-async function copyToClipboard(dailyStats: DailyStats[]): Promise<void> {
+async function clickAddMetricButton(): Promise<boolean> {
+  showToast("메트릭 추가 버튼 클릭 중...", "loading");
+
   try {
-    // Get all unique traffic source titles from all stats
-    const allSourceTitles = new Set<string>();
-    dailyStats.forEach(stat => {
-      stat.trafficSources.forEach(source => {
-        allSourceTitles.add(source.title);
-      });
-    });
-    const sourceColumns = Array.from(allSourceTitles);
+    // Find the add metric button by ID and aria-label
+    const addMetricButton = document.querySelector('ytcp-icon-button#add-metric-icon[aria-label="Add metric to table"]') as HTMLElement;
 
-    // Format as TSV with dynamic columns for each traffic source
-    const header = ["Date", "Selected Time", "Total Views", "Advertising Views", ...sourceColumns].join('\t');
+    if (addMetricButton) {
+      console.log("[YT Analytics] Found 'Add metric' button, clicking...");
+      addMetricButton.click();
+      await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3s for dialog to open
+      showToast("메트릭 선택 메뉴 열림", "success");
+      return true;
+    }
 
-    const rows = dailyStats.map(stat => {
-      // Create a map of traffic source values for quick lookup
-      const sourceMap = new Map(stat.trafficSources.map(s => [s.title, s.value]));
-
-      // Build row with all columns
-      const columns = [
-        stat.date,
-        stat.selectedTime,
-        stat.totalViews.toString(),
-        stat.advertisingViews.toString(),
-        ...sourceColumns.map(title => (sourceMap.get(title) || 0).toString())
-      ];
-
-      return columns.join('\t');
-    });
-
-    const tsv = [header, ...rows].join('\n');
-
-    // Log what's being copied within the configured dates
-    // console.log("[YT Analytics] ============================================");
-    // console.log("[YT Analytics] Copying comprehensive analytics data");
-    // console.log("[YT Analytics] ============================================");
-    // console.log("[YT Analytics] Configured date range:", targetDates.length > 0 ? `${targetDates[0]} to ${targetDates[targetDates.length - 1]}` : "Not set");
-    // console.log("[YT Analytics] Number of dates:", targetDates.length);
-    // console.log("[YT Analytics] Number of data rows copied:", dailyStats.length);
-    // console.log("[YT Analytics] Traffic source columns:", sourceColumns);
-    // console.log("[YT Analytics] Raw TSV format:");
-    // console.log(tsv);
-    // console.log("[YT Analytics] Parsed data structure:");
-    // console.table(dailyStats);
-    // console.log("[YT Analytics] Traffic sources detail:");
-    // dailyStats.forEach(stat => {
-    //   console.table(stat.trafficSources);
-    // });
-    // console.log("[YT Analytics] ============================================");
-
-    // Copy to clipboard
-    await navigator.clipboard.writeText(tsv);
-
-    // console.log("[YT Analytics] Data copied to clipboard");
-    showToast("데이터가 클립보드에 복사되었습니다 (모든 트래픽 소스 포함)", "success", 5000);
+    console.warn("[YT Analytics] 'Add metric' button not found");
+    showToast("메트릭 추가 버튼을 찾을 수 없습니다", "error");
+    return false;
   } catch (error) {
-    // console.error("[YT Analytics] Failed to copy to clipboard:", error);
-    showToast("클립보드 복사 실패", "error");
+    console.error("[YT Analytics] Error clicking 'Add metric' button:", error);
+    showToast("메트릭 추가 버튼 클릭 실패", "error");
+    return false;
   }
 }
 
 /**
- * Main workflow execution
+ * Step 6: Check "Engaged views" checkbox in the metric picker dialog
  */
+async function checkEngagedViewsCheckbox(): Promise<boolean> {
+  return checkCheckbox(
+    'ytcp-checkbox-lit#ENGAGED_VIEWS',
+    {
+      loading: "Engaged views 체크박스 선택 중...",
+      success: "Engaged views 체크박스 선택 완료",
+      info: "Engaged views 체크박스 이미 선택됨",
+      error: "Engaged views 체크박스 선택 실패",
+      notFound: "Engaged views 체크박스를 찾을 수 없습니다"
+    },
+    "Engaged views"
+  );
+}
+
+/**
+ * Step 6.5: Click "Apply" button in the metric picker dialog
+ */
+async function clickApplyButton(): Promise<boolean> {
+  showToast("Apply 버튼 클릭 중...", "loading");
+
+  try {
+    // Find Apply button by ID
+    const applyButton = document.querySelector('ytcp-button#apply-button[aria-label="Apply"]') as HTMLElement;
+
+    if (applyButton) {
+      // The actual button is inside ytcp-button-shape
+      const buttonElement = applyButton.querySelector('button[aria-label="Apply"]') as HTMLElement;
+
+      if (buttonElement) {
+        console.log("[YT Analytics] Found 'Apply' button, clicking...");
+        buttonElement.click();
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for changes to apply
+        showToast("Apply 버튼 클릭 완료", "success");
+        return true;
+      } else {
+        // Fallback: click the ytcp-button element itself
+        console.log("[YT Analytics] Button element not found, clicking ytcp-button directly...");
+        applyButton.click();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        showToast("Apply 버튼 클릭 완료", "success");
+        return true;
+      }
+    }
+
+    console.warn("[YT Analytics] 'Apply' button not found");
+    showToast("Apply 버튼을 찾을 수 없습니다", "error");
+    return false;
+  } catch (error) {
+    console.error("[YT Analytics] Error clicking 'Apply' button:", error);
+    showToast("Apply 버튼 클릭 실패", "error");
+    return false;
+  }
+}
+
+/**
+ * Step 7: Close the metric picker dialog
+ */
+async function closeMetricPickerDialog(): Promise<boolean> {
+  showToast("메트릭 선택 메뉴 닫기 중...", "loading");
+
+  try {
+    // Find close button in the header by looking for it within the header element
+    // The close button should be: ytcp-icon-button#close-button with slot="secondary-header" inside .header.style-scope.ytcp-dialog
+    const header = document.querySelector('.header.style-scope.ytcp-dialog');
+    const closeButton = header
+      ? header.querySelector('ytcp-icon-button#close-button[aria-label="Close"][slot="secondary-header"]') as HTMLElement
+      : null;
+
+    if (closeButton) {
+      console.log("[YT Analytics] Found close button in header, clicking...");
+      closeButton.click();
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for dialog to close
+      showToast("메트릭 선택 메뉴 닫힘", "success");
+      return true;
+    }
+
+    console.warn("[YT Analytics] Close button not found in header");
+    showToast("닫기 버튼을 찾을 수 없습니다", "error");
+    return false;
+  } catch (error) {
+    console.error("[YT Analytics] Error closing metric picker dialog:", error);
+    showToast("메뉴 닫기 실패", "error");
+    return false;
+  }
+}
+
+/**
+ * Step 8: Uncheck "Total" checkbox in the table
+ */
+async function uncheckTotalCheckbox(): Promise<boolean> {
+  showToast("총계 체크박스 해제 중...", "loading");
+
+  try {
+    // Find the checkbox in the table row with aria-label "Select row for Total"
+    const checkboxElement = document.querySelector('ytcp-checkbox-lit[aria-label="Select row for Total"]');
+
+    if (checkboxElement) {
+      const checkbox = checkboxElement.querySelector('div[role="checkbox"]') as HTMLElement;
+
+      if (checkbox) {
+        const ariaChecked = checkbox.getAttribute('aria-checked');
+
+        if (ariaChecked === 'true') {
+          console.log("[YT Analytics] Found checked 'Total' checkbox, unchecking...");
+          checkbox.click();
+          await new Promise(resolve => setTimeout(resolve, 500));
+          showToast("총계 체크박스 해제 완료", "success");
+          return true;
+        } else {
+          console.log("[YT Analytics] 'Total' checkbox already unchecked");
+          showToast("총계 체크박스 이미 해제됨", "info");
+          return true;
+        }
+      }
+    }
+
+    console.warn("[YT Analytics] 'Total' checkbox in table not found");
+    showToast("총계 체크박스를 찾을 수 없습니다", "error");
+    return false;
+  } catch (error) {
+    console.error("[YT Analytics] Error unchecking 'Total' checkbox:", error);
+    showToast("총계 체크박스 해제 실패", "error");
+    return false;
+  }
+}
+
 async function executeWorkflow(): Promise<void> {
   // console.log("[YT Analytics] ========================================");
   // console.log("[YT Analytics] Starting YT Studio Analytics automation");
@@ -1279,6 +1567,10 @@ async function executeWorkflow(): Promise<void> {
     showToast(`수집 날짜: ${dateRangeMsg} (~12:10 AM)`, "info", 3000);
     await new Promise(resolve => setTimeout(resolve, 1000));
 
+    // ============================================================
+    // FIRST PASS: Collect Total + YouTube advertising data
+    // ============================================================
+
     // Step 1: Check "Total" checkbox
     await checkTotalCheckbox();
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1294,12 +1586,32 @@ async function executeWorkflow(): Promise<void> {
       throw new Error("Chart not found");
     }
 
-    // Step 4: Collect data by hovering
+    // Step 4: Collect data by hovering (first pass)
     await collectDataByHovering();
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // console.log("[YT Analytics] ========================================");
-    // console.log("[YT Analytics] Workflow completed successfully!");
-    // console.log("[YT Analytics] ========================================");
+    // ============================================================
+    // SECOND PASS: Collect Engaged views data
+    // ============================================================
+
+    showToast("두 번째 수집 시작: Engaged views", "info", 3000);
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Step 5: Click "Add metric to table" button
+    const addMetricSuccess = await clickAddMetricButton();
+    if (!addMetricSuccess) {
+      throw new Error("Failed to click 'Add metric' button");
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Step 6: Check "Engaged views" checkbox
+    const engagedViewsSuccess = await checkEngagedViewsCheckbox();
+    if (!engagedViewsSuccess) {
+      throw new Error("Failed to check 'Engaged views' checkbox");
+    }
+
+    // Workflow stops here - menu remains open for manual verification
+    return;
 
   } catch (error) {
     // console.error("[YT Analytics] Workflow failed:", error);
